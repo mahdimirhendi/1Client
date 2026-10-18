@@ -1,0 +1,238 @@
+/* 1Client design tokens (light theme). Source of truth for UI colors, type and sizes. */
+:root {
+  /* Accent */
+  --accent: #0068D6;
+  --accent-hover: #00519F;
+  --accent-tint: #E8F0FB;
+  --accent-band: #F3F8FE;        /* active statement / selected row band */
+
+  /* Text */
+  --label: #1D1D1F;
+  --label-control: #3A3A3C;
+  --label-secondary: #6E6E73;
+  --label-tertiary: #8E8E93;
+  --label-quaternary: #AEAEB2;
+
+  /* Surfaces */
+  --bg-window: #FFFFFF;
+  --bg-chrome: #F4F4F6;          /* toolbar, sidebar */
+  --bg-sheet: #F6F6F8;           /* sheets and dialogs */
+  --bg-inspector: #F7F7F9;       /* right panel, result toolbar */
+  --bg-conn-tabs: #E3E3E8;       /* connection tab bar */
+  --bg-doc-tabs: #EBEBEF;        /* inner tab bar */
+  --bg-segment-track: #E4E4E9;
+  --bg-field: #F2F2F5;
+  --bg-row-alt: #FAFAFB;
+  --bg-canvas: #FAFAFB;          /* diagram canvas, dot grid #D5D5DA every 20px */
+
+  /* Raised surfaces and controls */
+  --bg-card: #FFFFFF;            /* grouped lists, cards */
+  --bg-control: #FFFFFF;         /* buttons, pop-ups, text fields */
+  --bg-segment-on: #FFFFFF;
+  --bg-search: #EBEBEF;
+  --bg-null: #F0F0F3;
+  --bg-hover-row: #F5F5F7;
+  --bg-icon-tile: #E3E3E8;
+  --bg-menu: rgba(246, 246, 248, 0.96);
+  --switch-off: #E5E5EA;
+  --hover: rgba(0, 0, 0, 0.05);
+  --control-ring: rgba(0, 0, 0, 0.18);
+  --line: rgba(0, 0, 0, 0.08);
+  --line-strong: rgba(0, 0, 0, 0.13);
+  --line-dashed: #C7C7CC;
+
+  /* Lines */
+  --separator: rgba(0, 0, 0, 0.10);
+  --separator-strong: rgba(0, 0, 0, 0.14);
+  --hairline: 0.5px;
+
+  /* Status */
+  --success: #34C759;   --success-text: #1E6B35;  --success-bg: #E9F6EC;
+  --error: #E5484D;     --error-text: #8E1F1A;    --error-bg: #FDECEC;
+  --warning: #FF9F0A;   --warning-text: #7A4A00;  --warning-bg: #FDF0D9;
+
+  /* Environment colors are per environment (Settings › Environments), see src/lib/theme.ts. */
+  --selection: #CDE2FB;
+
+  /* Engines */
+  --engine-postgres: #2F5F98;
+  --engine-mysql: #B05E0C;
+
+  /* Schema */
+  --pk: #B07800;
+  --fk: #0068D6;
+
+  /* SQL syntax */
+  --syn-keyword: #9B2393;    /* weight 600 */
+  --syn-function: #3900A0;
+  --syn-string: #C41A16;
+  --syn-number: #1C00CF;
+  --syn-comment: #5D6C79;    /* italic */
+  --syn-param: #0F68A0;      --syn-param-bg: #E8F1FC;
+  --syn-error-underline: #E5484D; /* wavy */
+
+  /* Type */
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --text-xs: 11px;     /* section headers (600), badges, meta */
+  --text-sm: 12px;     /* secondary, grid cells, mono */
+  --text-md: 13px;     /* body, controls, editor */
+  --text-lg: 15px;     /* pane titles */
+  --text-xl: 17px;     /* sheet titles */
+  --editor-line-height: 22px;
+
+  /* Radii */
+  --radius-window: 12px;
+  --radius-card: 12px;
+  --radius-group: 10px;
+  --radius-button: 7px;
+  --radius-field: 6px;
+  --radius-pill: 11px;
+
+  /* Layout */
+  --toolbar-h: 52px;
+  --conn-tabs-h: 32px;
+  --doc-tabs-h: 34px;
+  --sidebar-w: 250px;
+  --inspector-w: 272px;
+  --form-row-h: 40px;
+  --grid-header-h: 38px;
+  --grid-row-h: 28px;
+  --control-h: 28px;
+  --editor-band: rgba(0, 104, 214, 0.045);
+  --selection-inactive: #E3E3E8;
+  --selection-match: rgba(0, 104, 214, 0.10);
+  --search-match: rgba(255, 159, 10, 0.28);
+}
+
+/* Dark: follows macOS unless the user picked Light or Dark in 1Client (View › Appearance). */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --editor-band: rgba(10, 132, 255, 0.07);
+    --selection-inactive: #3A3A3E;
+    --selection-match: rgba(10, 132, 255, 0.16);
+    --search-match: rgba(255, 159, 10, 0.30);
+    --accent: #0A84FF;
+    --accent-hover: #409CFF;
+    --accent-tint: #1D3350;
+    --accent-band: #1F2A38;
+    --selection: #264F78;
+
+    --label: #F2F2F7;
+    --label-control: #D1D1D6;
+    --label-secondary: #A1A1A6;
+    --label-tertiary: #8E8E93;
+    --label-quaternary: #636366;
+
+    --bg-window: #1E1E20;
+    --bg-chrome: #2B2B2E;
+    --bg-sheet: #252528;
+    --bg-inspector: #28282B;
+    --bg-conn-tabs: #19191B;
+    --bg-doc-tabs: #202023;
+    --bg-segment-track: #3A3A3E;
+    --bg-field: #38383C;
+    --bg-row-alt: #232326;
+    --bg-canvas: #1A1A1C;
+
+    --bg-card: #2C2C2F;
+    --bg-control: #3A3A3D;
+    --bg-segment-on: #636366;
+    --bg-search: #38383C;
+    --bg-null: #3A3A3E;
+    --bg-hover-row: #2C2C2F;
+    --bg-icon-tile: #3A3A3E;
+    --bg-menu: rgba(40, 40, 43, 0.96);
+    --switch-off: #48484A;
+    --hover: rgba(255, 255, 255, 0.07);
+    --control-ring: rgba(255, 255, 255, 0.12);
+    --line: rgba(255, 255, 255, 0.08);
+    --line-strong: rgba(255, 255, 255, 0.13);
+    --line-dashed: #545458;
+
+    --separator: rgba(255, 255, 255, 0.10);
+    --separator-strong: rgba(255, 255, 255, 0.14);
+
+    --success: #30D158;   --success-text: #5CD687;  --success-bg: #17321F;
+    --error: #FF453A;     --error-text: #FF9F99;    --error-bg: #3A1D1E;
+    --warning: #FF9F0A;   --warning-text: #FFC266;  --warning-bg: #3A2E17;
+
+    --engine-postgres: #3D7BC9;
+    --engine-mysql: #C4701A;
+    --pk: #FFC233;
+    --fk: #0A84FF;
+
+    --syn-keyword: #FF7AB2;
+    --syn-function: #B281EB;
+    --syn-string: #FC6A5D;
+    --syn-number: #D9C97C;
+    --syn-comment: #7F8C98;
+    --syn-param: #6BDFFF;      --syn-param-bg: #1E2F45;
+  }
+}
+
+:root[data-theme="dark"] {
+  --editor-band: rgba(10, 132, 255, 0.07);
+  --selection-inactive: #3A3A3E;
+  --selection-match: rgba(10, 132, 255, 0.16);
+  --search-match: rgba(255, 159, 10, 0.30);
+  --accent: #0A84FF;
+  --accent-hover: #409CFF;
+  --accent-tint: #1D3350;
+  --accent-band: #1F2A38;
+  --selection: #264F78;
+
+  --label: #F2F2F7;
+  --label-control: #D1D1D6;
+  --label-secondary: #A1A1A6;
+  --label-tertiary: #8E8E93;
+  --label-quaternary: #636366;
+
+  --bg-window: #1E1E20;
+  --bg-chrome: #2B2B2E;
+  --bg-sheet: #252528;
+  --bg-inspector: #28282B;
+  --bg-conn-tabs: #19191B;
+  --bg-doc-tabs: #202023;
+  --bg-segment-track: #3A3A3E;
+  --bg-field: #38383C;
+  --bg-row-alt: #232326;
+  --bg-canvas: #1A1A1C;
+
+  --bg-card: #2C2C2F;
+  --bg-control: #3A3A3D;
+  --bg-segment-on: #636366;
+  --bg-search: #38383C;
+  --bg-null: #3A3A3E;
+  --bg-hover-row: #2C2C2F;
+  --bg-icon-tile: #3A3A3E;
+  --bg-menu: rgba(40, 40, 43, 0.96);
+  --switch-off: #48484A;
+  --hover: rgba(255, 255, 255, 0.07);
+  --control-ring: rgba(255, 255, 255, 0.12);
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.13);
+  --line-dashed: #545458;
+
+  --separator: rgba(255, 255, 255, 0.10);
+  --separator-strong: rgba(255, 255, 255, 0.14);
+
+  --success: #30D158;   --success-text: #5CD687;  --success-bg: #17321F;
+  --error: #FF453A;     --error-text: #FF9F99;    --error-bg: #3A1D1E;
+  --warning: #FF9F0A;   --warning-text: #FFC266;  --warning-bg: #3A2E17;
+
+  --engine-postgres: #3D7BC9;
+  --engine-mysql: #C4701A;
+  --pk: #FFC233;
+  --fk: #0A84FF;
+
+  --syn-keyword: #FF7AB2;
+  --syn-function: #B281EB;
+  --syn-string: #FC6A5D;
+  --syn-number: #D9C97C;
+  --syn-comment: #7F8C98;
+  --syn-param: #6BDFFF;      --syn-param-bg: #1E2F45;
+}
+
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }

@@ -1,0 +1,32 @@
+name: Release
+
+# Push a tag like v0.2.0 to build a universal (Apple silicon + Intel) disk image and attach it
+# to a draft release. Review the draft on GitHub, then publish it.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: macOS disk image
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - run: npm ci
+      - run: npx tauri build --target universal-apple-darwin --bundles dmg
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" target/universal-apple-darwin/release/bundle/dmg/*.dmg \
+            --draft --generate-notes --title "1Client ${GITHUB_REF_NAME#v}"

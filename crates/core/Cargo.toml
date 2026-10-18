@@ -1,0 +1,30 @@
+[package]
+name = "oneclient-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Connections, SSH tunnels and database drivers for 1Client"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+directories = "6"
+russh = "0.64"
+tokio-postgres = "0.7"
+postgres-native-tls = "0.5"
+native-tls = "0.2"
+mysql_async = { version = "0.37", features = ["native-tls-tls"] }
+futures-util = "0.3"
+url = "2"
+percent-encoding = "2"
+data-encoding = "2.3"
+hmac = "0.13"
+sha1 = "0.11"
+chacha20poly1305 = "0.11"
+getrandom = "0.4"

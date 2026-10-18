@@ -1,0 +1,54 @@
+{
+  "name": "oneclient",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A fast, native-feeling PostgreSQL and MySQL client for macOS, with SSH tunnels and bastion hosts.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mahdimirhendi/1Client.git"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "check:predict": "node --experimental-strip-types src/lib/predict.check.ts",
+    "check:sort": "node --experimental-strip-types src/lib/sort.check.ts",
+    "check": "npm run typecheck && npm run check:predict && npm run check:sort",
+    "tauri": "tauri",
+    "app": "tauri build --bundles app && rm -rf /Applications/1Client.app && cp -R target/release/bundle/macos/1Client.app /Applications/ && echo '1Client installed in /Applications'",
+    "dmg": "tauri build --bundles dmg"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/lang-sql": "^6.10.0",
+    "@codemirror/language": "^6.13.1",
+    "@codemirror/search": "^6.7.2",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.43.14",
+    "@lezer/highlight": "^1.2.5",
+    "@tanstack/react-virtual": "^3.14.18",
+    "@tauri-apps/api": "^2.12.3",
+    "@tauri-apps/plugin-clipboard-manager": "^2.5.0",
+    "@tauri-apps/plugin-dialog": "^2.8.2",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "sql-formatter": "^15.9.0",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.2",
+    "@types/node": "^22.20.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "typescript": "~5.9.3",
+    "vite": "^8.3.4"
+  }
+}
