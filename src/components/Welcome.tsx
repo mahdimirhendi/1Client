@@ -35,7 +35,7 @@ export function Welcome() {
         <div className="welcome-brand" data-tauri-drag-region>
           <AppIcon />
           <div className="welcome-name">1Client</div>
-          <div className="muted">Version 0.1.0</div>
+          <div className="muted">Version {__APP_VERSION__}</div>
         </div>
         <div className="welcome-actions">
           <button className="welcome-action" onClick={() => setSheet({ mode: "new" })}>

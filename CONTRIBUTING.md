@@ -54,4 +54,52 @@ cargo test -p oneclient-core --test live -- --ignored
   for how the pieces fit.
 - Write comments that explain *why*, and user-facing text that says what happened and what to do next.
 
+## Releasing (maintainers)
+
+Every push to the `release` branch publishes a new version automatically. To release what is on `main`:
+
+```sh
+git push origin main:release
+```
+
+The [Release workflow](.github/workflows/release.yml) then:
+
+1. runs CI on that commit, and stops if anything fails;
+2. picks the version: the one in `package.json` or, when that one is already released, the next patch
+   number (0.1.0, 0.1.1, 0.1.2, …);
+3. builds a universal disk image for Apple silicon and Intel Macs, signed (and notarized when the
+   Apple secrets below are set);
+4. publishes the release with the disk image and the changes since the last release, and tags the
+   commit `vX.Y.Z`.
+
+For a new minor or major version, set it on `main` first, then release as usual:
+
+```sh
+npm version 0.2.0 --no-git-tag-version   # updates package.json and package-lock.json
+git commit -am "Start 0.2" && git push
+git push origin main:release
+```
+
+### Signing and notarization (optional)
+
+Without Apple credentials the app is ad-hoc signed, and people allow it once in System Settings the
+first time they open it. With an [Apple Developer Program](https://developer.apple.com/programs/)
+membership the workflow signs and notarizes the app instead, so it opens without any warning. Add
+these repository secrets (Settings › Secrets and variables › Actions):
+
+| Secret | Value |
+|---|---|
+| `APPLE_CERTIFICATE` | Your *Developer ID Application* certificate exported as `.p12`, base64-encoded: `base64 -i cert.p12 \| pbcopy` |
+| `APPLE_CERTIFICATE_PASSWORD` | The password you chose when exporting the `.p12` |
+| `APPLE_SIGNING_IDENTITY` | The certificate's name, e.g. `Developer ID Application: Your Name (TEAMID)` (`security find-identity -v -p codesigning`) |
+| `APPLE_ID` | The email of your Apple developer account |
+| `APPLE_PASSWORD` | An app-specific password from [account.apple.com](https://account.apple.com) |
+| `APPLE_TEAM_ID` | Your team ID, shown under Membership on [developer.apple.com](https://developer.apple.com/account) |
+
+## Repository rules
+
+`main` only changes through pull requests that pass CI and are approved by the maintainer
+([CODEOWNERS](.github/CODEOWNERS)); only the maintainer can push to `release`. Contributors fork the
+repository and open a pull request against `main`.
+
 By contributing you agree that your work is released under the [MIT License](LICENSE).

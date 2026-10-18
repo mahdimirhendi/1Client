@@ -1,32 +1,110 @@
 name: Release
 
-# Push a tag like v0.2.0 to build a universal (Apple silicon + Intel) disk image and attach it
-# to a draft release. Review the draft on GitHub, then publish it.
+# Every push to the `release` branch publishes a new version. To release what is on main:
+#
+#   git push origin main:release
+#
+# 1. CI runs on the commit; nothing is released if it fails.
+# 2. The version is the one in package.json or, when that one is already released, the next
+#    patch number (0.1.0, 0.1.1, 0.1.2, ...). Set a new minor or major version in package.json.
+# 3. A universal disk image (Apple silicon and Intel) is built. Without Apple secrets the app is
+#    ad-hoc signed and people allow it once in System Settings; with these repository secrets it
+#    is signed with your Developer ID and notarized, and opens without any warning:
+#    APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY, APPLE_ID,
+#    APPLE_PASSWORD, APPLE_TEAM_ID (see CONTRIBUTING.md › Releasing).
+# 4. The release is published with the disk image and the changes since the last release, and
+#    the commit is tagged vX.Y.Z.
 on:
   push:
-    tags: ["v*"]
+    branches: [release]
 
 permissions:
   contents: write
 
+# One release at a time, in push order, so two quick pushes never get the same version.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
-  macos:
-    name: macOS disk image
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: Build and publish
+    needs: ci
     runs-on: macos-latest
+    env:
+      NOTARIZE: ${{ secrets.APPLE_CERTIFICATE != '' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # all tags and history: needed for the version and the list of changes
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+
+      - name: Choose the version
+        id: version
+        run: |
+          base=$(node -p "require('./package.json').version")
+          if ! [[ "$base" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::error::package.json version \"$base\" must look like 1.2.3"
+            exit 1
+          fi
+          major=${BASH_REMATCH[1]} minor=${BASH_REMATCH[2]} patch=${BASH_REMATCH[3]}
+          # The highest patch already released for this major.minor, if any.
+          last=$(git tag --list "v$major.$minor.*" | sed -nE "s/^v$major\.$minor\.([0-9]+)$/\1/p" | sort -n | tail -1)
+          if [ -n "$last" ] && [ "$last" -ge "$patch" ]; then patch=$((last + 1)); fi
+          version="$major.$minor.$patch"
+          previous=$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          echo "Releasing $version (previous release: ${previous:-none})"
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
       - run: npm ci
-      - run: npx tauri build --target universal-apple-darwin --bundles dmg
-      - name: Draft the release
+      # The app and its disk image take their version from package.json.
+      - run: npm version "${{ steps.version.outputs.version }}" --no-git-tag-version --allow-same-version
+
+      - name: Build (ad-hoc signed)
+        if: env.NOTARIZE != 'true'
+        run: npx tauri build --target universal-apple-darwin --bundles dmg
+
+      - name: Build (signed with Developer ID and notarized)
+        if: env.NOTARIZE == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npx tauri build --target universal-apple-darwin --bundles dmg
+
+      - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PREVIOUS: ${{ steps.version.outputs.previous }}
         run: |
-          gh release create "$GITHUB_REF_NAME" target/universal-apple-darwin/release/bundle/dmg/*.dmg \
-            --draft --generate-notes --title "1Client ${GITHUB_REF_NAME#v}"
+          {
+            echo "Download **1Client_${VERSION}_universal.dmg** below, open it and drag **1Client** into **Applications**."
+            echo "It runs on Apple silicon and Intel Macs with macOS 12 or newer."
+            echo
+            echo "## Changes"
+            echo
+            if [ -n "$PREVIOUS" ]; then
+              git log --no-merges --format='- %s' "$PREVIOUS..HEAD"
+              echo
+              echo "**Full changelog:** https://github.com/$GITHUB_REPOSITORY/compare/$PREVIOUS...v$VERSION"
+            else
+              echo "- First release"
+            fi
+          } > notes.md
+          gh release create "v$VERSION" target/universal-apple-darwin/release/bundle/dmg/*.dmg \
+            --target "$GITHUB_SHA" --title "1Client $VERSION" --notes-file notes.md --latest

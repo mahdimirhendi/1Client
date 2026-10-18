@@ -70,16 +70,9 @@ connection is tagged with its environment so you always know where you are.
 
 ### Download
 
-Prebuilt disk images for Apple silicon and Intel Macs are published on the
-[Releases](https://github.com/mahdimirhendi/1Client/releases) page (until the first one is out,
-[build from source](#build-from-source)). Open the `.dmg` and drag **1Client** to Applications.
-
-The app is not notarized by Apple yet, so the first time, right-click **1Client** in Applications and
-choose **Open**, or run:
-
-```sh
-xattr -dr com.apple.quarantine /Applications/1Client.app
-```
+Download the latest `.dmg` from [Releases](https://github.com/mahdimirhendi/1Client/releases/latest),
+open it and drag **1Client** into **Applications**. It runs on Apple silicon and Intel Macs with
+macOS 12 or newer.
 
 ### Build from source
 
