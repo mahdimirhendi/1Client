@@ -58,6 +58,8 @@ export default function App() {
           else if (c && d) st.run(c.id, d.id, d.sql, d.kind === "table");
           return;
         case "find":
+          // A table tab without its editor searches with its filter instead.
+          if (d?.table && !d.showEditor) return document.querySelector<HTMLInputElement>(".filter-bar input:not(:disabled)")?.focus();
           return editorCommand("find");
         case "format":
           return editorCommand("format");

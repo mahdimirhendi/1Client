@@ -57,9 +57,13 @@ by a command-line tool.
   result. Edits become one `UPDATE … WHERE <primary key>` per row, all in one transaction, and each
   must change exactly one row or everything is rolled back. PostgreSQL gets escaped literals (the
   confirmation dialog shows the exact SQL); MySQL uses bound parameters.
-- **Sorting.** A table tab opened from the sidebar is sorted by the server (`ORDER BY`, NULLs last),
-  so the order covers the whole table. Any other result is sorted in the grid by value: numbers,
-  dates and times by value, text alphabetically.
+- **Filtering and sorting.** A table tab opened from the sidebar is filtered and sorted by the server
+  (`WHERE …`, then `ORDER BY …` with NULLs last), so both cover the whole table. Filter values are
+  always sent as quoted, escaped literals that the server converts to the column's type; text matching
+  (`contains`, `starts with`, …) compares the column as text, ignoring case, with `!` as the `LIKE`
+  escape character so `%` and `_` in a value are matched literally. A condition typed in SQL mode is
+  used as written. Any other result is sorted in the grid by value: numbers, dates and times by value,
+  text alphabetically.
 - **Errors.** One `Error` type, serialised to the UI as `{ kind, message, … }`. Server errors keep every
   field (code, SQLSTATE, detail, hint, position); `unknownHostKey` carries the key for "Trust and Retry".
 - **Links.** `oneclient://open?url=…` and plain database URLs open a temporary connection, kept in
@@ -88,5 +92,5 @@ by a command-line tool.
 - `cargo test --workspace` runs the Rust unit tests.
 - `crates/core/tests/live.rs` runs against real PostgreSQL, MySQL and SSH servers; it is ignored by
   default and configured with environment variables listed at the top of the file.
-- `npm run check` type-checks the UI and runs the predictor and sorting checks.
+- `npm run check` type-checks the UI and runs the predictor, sorting and SQL checks.
 - `npm run dev` runs the UI in a browser against `src/mock.ts`, a small in-memory backend with made-up data.

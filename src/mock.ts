@@ -111,7 +111,7 @@ const customers: Cell[][] = COMPANIES.map((name, i) => {
   const slug = name.toLowerCase().split(/[^a-z]+/).filter(Boolean)[0];
   return [String(1001 + i * 37), name, i % 5 === 3 ? null : `billing@${slug}.example`, TIERS[i % 3], stamp(30 + i * 17)];
 });
-const orders: Cell[][] = Array.from({ length: 160 }, (_, i) => [
+const orders: Cell[][] = Array.from({ length: 260 }, (_, i) => [
   String(50_001 + i),
   customers[Math.floor(rand() * customers.length)][0],
   STATUSES[i % STATUSES.length],
@@ -138,16 +138,70 @@ const tables: MockTable[] = [
 /** Postgres type names as the server reports them for a result column. */
 const PG_TYPE: Record<string, string> = { int8: "int8", text: "text", numeric: "numeric", timestamptz: "timestamptz", date: "date" };
 
-/** `SELECT * FROM "schema"."table" [ORDER BY "col" ASC|DESC ...] LIMIT n`, as table tabs send it. */
+/** Split a WHERE clause on AND / OR outside quoted strings. */
+function splitWhere(where: string): { conds: string[]; any: boolean } {
+  const strings: string[] = [];
+  const masked = where.replace(/E?'(?:[^']|'')*'/g, (lit) => `\u0000${strings.push(lit) - 1}\u0000`);
+  const conds = masked.split(/ (?:AND|OR) /).map((c) => c.replace(/\u0000(\d+)\u0000/g, (_, i) => strings[Number(i)]));
+  return { conds, any: / OR /.test(masked) };
+}
+
+const unquote = (lit: string) => {
+  const e = lit.startsWith("E");
+  const body = lit.slice(e ? 2 : 1, -1).replace(/''/g, "'");
+  return e ? body.replace(/\\\\/g, "\\") : body;
+};
+
+/** The conditions 1Client's filter bar generates (see `whereSql`), evaluated on one row. */
+function matches(cond: string, row: Cell[], cols: string[]): boolean {
+  const cell = (name: string) => row[cols.indexOf(name)];
+  let m = /^["`](\w+)["`] IS (NOT )?NULL$/.exec(cond);
+  if (m) return (cell(m[1]) === null) !== !!m[2];
+  m = /^["`](\w+)["`] (NOT )?IN \((.*)\)$/.exec(cond);
+  if (m) {
+    const items = (m[3].match(/E?'(?:[^']|'')*'/g) ?? []).map(unquote);
+    const v = cell(m[1]);
+    return v !== null && items.includes(v) !== !!m[2];
+  }
+  m = /^(?:["`](\w+)["`]::text|CAST\(["`](\w+)["`] AS CHAR\)) (NOT )?I?LIKE (E?'.*') ESCAPE '!'$/.exec(cond);
+  if (m) {
+    const v = cell(m[1] ?? m[2]);
+    if (v === null) return false;
+    let re = "";
+    const p = unquote(m[4]);
+    for (let i = 0; i < p.length; i++) {
+      if (p[i] === "!") re += p[++i].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      else re += p[i] === "%" ? ".*" : p[i] === "_" ? "." : p[i].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+    return new RegExp(`^${re}$`, "is").test(v) !== !!m[3];
+  }
+  m = /^["`](\w+)["`] (=|<>|<=|>=|<|>) (E?'.*')$/.exec(cond);
+  if (m) {
+    const v = cell(m[1]);
+    if (v === null) return false;
+    const want = unquote(m[3]);
+    const numeric = v !== "" && want !== "" && !isNaN(Number(v)) && !isNaN(Number(want));
+    const c = numeric ? Number(v) - Number(want) : v.localeCompare(want);
+    return { "=": c === 0, "<>": c !== 0, "<": c < 0, ">": c > 0, "<=": c <= 0, ">=": c >= 0 }[m[2]]!;
+  }
+  return true;
+}
+
+/** `SELECT * FROM "schema"."table" [WHERE …] [ORDER BY "col" ASC|DESC …] LIMIT n`, as table tabs send it. */
 function tableQuery(sql: string): QueryOutput | null {
-  const m = /^\s*select \* from "(\w+)"\."(\w+)"(?: order by "(\w+)" (asc|desc))?/i.exec(sql);
+  const m = /^\s*select \* from ["`](\w+)["`]\.["`](\w+)["`](?: where (.*?))?(?: order by ["`](\w+)["`](?: is null, ["`]\w+["`])? (asc|desc)(?: nulls last)?)? limit \d+;?\s*$/is.exec(sql);
   const t = m && tables.find((x) => x.info.schema === m[1] && x.info.name === m[2]);
   if (!m || !t) return null;
+  const names = t.info.columns.map((c) => c.name);
   let rows = t.rows.map((r) => [...r]);
-  const col = m[3] ? t.info.columns.findIndex((c) => c.name === m[3]) : -1;
+  if (m[3]) {
+    const { conds, any } = splitWhere(m[3]);
+    rows = rows.filter((r) => (any ? conds.some((c) => matches(c, r, names)) : conds.every((c) => matches(c, r, names))));
+  }
+  const col = m[4] ? names.indexOf(m[4]) : -1;
   if (col >= 0) {
     const numeric = /int|numeric/.test(t.info.columns[col].dataType);
-    const sign = m[4].toLowerCase() === "desc" ? -1 : 1;
+    const sign = m[5].toLowerCase() === "desc" ? -1 : 1;
     rows = rows.sort((a, b) => {
       const [x, y] = [a[col], b[col]];
       if (x === null || y === null) return x === y ? 0 : x === null ? 1 : -1;

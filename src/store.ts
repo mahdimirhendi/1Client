@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { api } from "./api";
-import { isWrite, splitStatements, tableSql, type Sort, type TableRef } from "./lib/sql";
+import { isWrite, splitStatements, tableSql, type TableRef, type TableView } from "./lib/sql";
 import type { AppError, ConnectionProfile, EnvironmentDef, QueryOutput, RowEdit, SessionInfo, TableInfo } from "./types";
 
 /** A tab inside a connection: a query, or a table opened from the sidebar. */
@@ -16,10 +16,12 @@ export interface DocTab {
   lastRun?: string;
   /** SQL editor visible. Query tabs start with it open, table tabs closed. */
   showEditor: boolean;
-  /** Table tabs: the table shown, so sorting can be done by the server. */
+  /** Table tabs: the table shown, so filtering and sorting can be done by the server. */
   table?: TableRef;
-  /** Table tabs: the ORDER BY of the current query. */
-  sort?: Sort;
+  /** Table tabs: the filters and sort of the current query. */
+  view?: TableView;
+  /** The grid has edits that are not saved yet. */
+  dirty?: boolean;
 }
 
 /** A top-level tab: one open connection with its own inner tabs. */
@@ -86,8 +88,9 @@ interface State {
   activateDocAt(connId: string, n: number): void;
   /** Next (+1) or previous (-1) tab, wrapping around. */
   cycleDoc(connId: string, step: 1 | -1): void;
-  /** Sort a table tab on the server, or `null` for the table's own order. */
-  sortTable(connId: string, docId: string, sort: Sort | null): void;
+  /** Filter and sort a table tab on the server, and run its new query. */
+  setTableView(connId: string, docId: string, view: TableView): void;
+  setDirty(connId: string, docId: string, dirty: boolean): void;
   setSql(connId: string, docId: string, sql: string): void;
   run(connId: string, docId: string, sql: string, confirmed?: boolean): Promise<void>;
   setPendingWrite(p: PendingWrite | null): void;
@@ -298,13 +301,18 @@ export const useApp = create<State>((set, get) => ({
     get().activateDoc(connId, next.id);
   },
 
-  sortTable(connId, docId, sort) {
+  setTableView(connId, docId, view) {
     const conn = get().conns.find((c) => c.id === connId);
     const doc = conn?.docs.find((d) => d.id === docId);
     if (!conn || !doc?.table) return;
-    const sql = tableSql(conn.profile.engine, doc.table, sort);
-    set((s) => ({ conns: patchDoc(s.conns, connId, docId, { sort: sort ?? undefined, sql }) }));
+    const sql = tableSql(conn.profile.engine, doc.table, view);
+    set((s) => ({ conns: patchDoc(s.conns, connId, docId, { view, sql }) }));
     get().run(connId, docId, sql, true);
+  },
+
+  setDirty(connId, docId, dirty) {
+    const doc = get().conns.find((c) => c.id === connId)?.docs.find((d) => d.id === docId);
+    if (doc && !!doc.dirty !== dirty) set((s) => ({ conns: patchDoc(s.conns, connId, docId, { dirty }) }));
   },
 
   setSql(connId, docId, sql) {

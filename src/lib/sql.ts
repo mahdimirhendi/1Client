@@ -97,17 +97,121 @@ export interface Sort {
   dir: "asc" | "desc";
 }
 
-/** The query of a table tab. Sorting is done by the server so it covers the whole table, NULLs last. */
-export function tableSql(engine: Engine, table: TableRef, sort?: Sort | null): string {
+export type FilterOp =
+  | "eq"
+  | "ne"
+  | "lt"
+  | "gt"
+  | "le"
+  | "ge"
+  | "contains"
+  | "notContains"
+  | "startsWith"
+  | "endsWith"
+  | "in"
+  | "notIn"
+  | "isNull"
+  | "notNull";
+
+export interface Filter {
+  column: string;
+  op: FilterOp;
+  /** Ignored by `isNull` / `notNull`; a comma-separated list for `in` / `notIn`. */
+  value: string;
+}
+
+/** Operators in the order the filter bar offers them. */
+export const FILTER_OPS: { op: FilterOp; label: string; needsValue: boolean }[] = [
+  { op: "eq", label: "=", needsValue: true },
+  { op: "ne", label: "≠", needsValue: true },
+  { op: "lt", label: "<", needsValue: true },
+  { op: "gt", label: ">", needsValue: true },
+  { op: "le", label: "≤", needsValue: true },
+  { op: "ge", label: "≥", needsValue: true },
+  { op: "contains", label: "contains", needsValue: true },
+  { op: "notContains", label: "does not contain", needsValue: true },
+  { op: "startsWith", label: "starts with", needsValue: true },
+  { op: "endsWith", label: "ends with", needsValue: true },
+  { op: "in", label: "in list", needsValue: true },
+  { op: "notIn", label: "not in list", needsValue: true },
+  { op: "isNull", label: "is NULL", needsValue: false },
+  { op: "notNull", label: "is not NULL", needsValue: false },
+];
+
+export const needsValue = (op: FilterOp) => FILTER_OPS.find((o) => o.op === op)?.needsValue ?? true;
+
+/** How a table tab is narrowed and ordered. All of it runs on the server, so it covers the whole table. */
+export interface TableView {
+  sort?: Sort;
+  filters?: Filter[];
+  /** `all`: every filter must match (AND); `any`: one is enough (OR). */
+  match?: "all" | "any";
+  /** A condition typed by hand, used instead of `filters` when set. */
+  where?: string;
+}
+
+/** A string literal that means the same whatever the server settings are. */
+export function sqlLiteral(engine: Engine, value: string): string {
+  if (engine === "mysql") {
+    // Doubled quotes work with and without NO_BACKSLASH_ESCAPES; backslashes must be doubled without it.
+    return `'${value.replace(/\\/g, "\\\\").replace(/'/g, "''")}'`;
+  }
+  // E'' strings always treat backslash as an escape, so doubling it is correct either way.
+  if (value.includes("\\")) return `E'${value.replace(/\\/g, "\\\\").replace(/'/g, "''")}'`;
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+const COMPARE: Partial<Record<FilterOp, string>> = { eq: "=", ne: "<>", lt: "<", gt: ">", le: "<=", ge: ">=" };
+
+/** One condition, or null when it is incomplete (no column, or no value where one is needed). */
+function condition(engine: Engine, f: Filter): string | null {
+  if (!f.column || (needsValue(f.op) && f.value === "")) return null;
+  const col = quoteIdent(engine, f.column);
+  const lit = (v: string) => sqlLiteral(engine, v);
+  const symbol = COMPARE[f.op];
+  if (symbol) return `${col} ${symbol} ${lit(f.value)}`;
+  switch (f.op) {
+    case "isNull":
+      return `${col} IS NULL`;
+    case "notNull":
+      return `${col} IS NOT NULL`;
+    case "in":
+    case "notIn": {
+      const items = f.value.split(",").map((v) => v.trim()).filter(Boolean);
+      return items.length ? `${col} ${f.op === "notIn" ? "NOT IN" : "IN"} (${items.map(lit).join(", ")})` : null;
+    }
+    default: {
+      // Text matching on any type (numbers, dates, JSON…), ignoring case. `!` escapes %, _ and itself,
+      // so the value is matched literally; it avoids backslash, whose meaning depends on server settings.
+      const text = engine === "postgres" ? `${col}::text` : `CAST(${col} AS CHAR)`;
+      const like = engine === "postgres" ? "ILIKE" : "LIKE";
+      const v = f.value.replace(/[!%_]/g, "!$&");
+      const pattern = f.op === "startsWith" ? `${v}%` : f.op === "endsWith" ? `%${v}` : `%${v}%`;
+      return `${text} ${f.op === "notContains" ? "NOT " : ""}${like} ${lit(pattern)} ESCAPE '!'`;
+    }
+  }
+}
+
+/** The WHERE condition for a table tab's filters, or "" when none is complete. */
+export function whereSql(engine: Engine, filters: Filter[] = [], match: TableView["match"] = "all"): string {
+  return filters
+    .map((f) => condition(engine, f))
+    .filter((c): c is string => c !== null)
+    .join(match === "any" ? " OR " : " AND ");
+}
+
+/** The query of a table tab: its filters (or hand-written condition), its sort (NULLs last), the row limit. */
+export function tableSql(engine: Engine, table: TableRef, view: TableView = {}): string {
   const from = `${quoteIdent(engine, table.schema)}.${quoteIdent(engine, table.name)}`;
+  const where = view.where?.trim() || whereSql(engine, view.filters, view.match);
   let order = "";
-  if (sort) {
-    const col = quoteIdent(engine, sort.column);
-    const dir = sort.dir.toUpperCase();
+  if (view.sort) {
+    const col = quoteIdent(engine, view.sort.column);
+    const dir = view.sort.dir.toUpperCase();
     // MySQL has no NULLS LAST; sorting on "IS NULL" first does the same.
     order = engine === "postgres" ? ` ORDER BY ${col} ${dir} NULLS LAST` : ` ORDER BY ${col} IS NULL, ${col} ${dir}`;
   }
-  return `SELECT * FROM ${from}${order} LIMIT ${TABLE_ROWS};`;
+  return `SELECT * FROM ${from}${where ? ` WHERE ${where}` : ""}${order} LIMIT ${TABLE_ROWS};`;
 }
 
 /** Fill a profile from `postgres://user:pass@host:5432/db?sslmode=require` or `mysql://…`. */

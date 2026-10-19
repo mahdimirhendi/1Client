@@ -60,6 +60,8 @@ Window
 - The grid shows each column's type under its name. Numbers are right-aligned, NULL is a gray pill,
   alternate rows are tinted, edited cells are amber until saved.
 - Clicking a header sorts ascending, then descending, then back to the original order.
+- Table tabs have a filter bar above the grid: column, operator and value per row, joined with
+  "Match all" or "Match any", and an SQL mode for a condition typed by hand. Enter applies.
 - Copy actions confirm with a short toast at the bottom of the window.
 
 ## Environments and color tags

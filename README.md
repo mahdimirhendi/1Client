@@ -43,8 +43,11 @@ connection is tagged with its environment so you always know where you are.
 
 **Work with results**
 - A fast virtualised grid with types under column names, or a paged JSON view.
+- **Filter** tables without writing SQL: pick a column, an operator (`=`, `≠`, `<`, `>`, contains,
+  starts with, in list, is NULL, …) and a value, and combine several with AND or OR. Or type the
+  condition in SQL. Right-click a cell to filter by its value or exclude it.
 - **Sort** by clicking a column header: numbers, dates and text all sort correctly. Tables opened
-  from the sidebar are sorted by the server, so the order covers the whole table.
+  from the sidebar are filtered and sorted by the server, so both cover the whole table.
 - **Edit cells** in place, including setting nullable columns to `NULL`. Changes stay highlighted until
   you save (⌘S); they run as `UPDATE … WHERE <primary key>` in one transaction.
 - Copy a value, a row, a row as JSON, a page or all rows, with a confirmation each time.
@@ -107,7 +110,8 @@ npm run app        # builds 1Client.app and copies it to /Applications
 | ⌘↵ / ⇧⌘↵ | Run statement or selection / run everything |
 | ⌘E | Show or hide the SQL editor |
 | ⌘R | Run the tab's query again (refresh) |
-| ⌘F / ⇧⌘F / ⌘/ | Find and replace / format SQL / toggle comment |
+| ⌘F | Find and replace in the editor; in a table tab, jump to the filter |
+| ⇧⌘F / ⌘/ | Format SQL / toggle comment |
 | ↩ or double-click | Edit the selected cell |
 | ⌘⌫ | Set the selected cell to `NULL` |
 | ⌘S | Save edited cells |
@@ -162,7 +166,7 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 npm install
 npm run tauri dev   # the app, with hot reload
 npm run dev         # only the UI, in a browser, against a made-up backend (src/mock.ts)
-npm run check       # TypeScript, predictor and sorting checks
+npm run check       # TypeScript, predictor, sorting and SQL checks
 cargo test --workspace
 ```
 

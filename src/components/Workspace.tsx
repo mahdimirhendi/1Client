@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { useApp, type ConnTab, type DocTab } from "../store";
 import { ConnectionTabs } from "./ConnectionTabs";
 import { DocTabs } from "./DocTabs";
+import { FilterBar } from "./FilterBar";
 import { IconDatabase, IconPlay } from "./Icons";
 import { QueryEditor, runActive, useEditorStatus } from "./QueryEditor";
 import { Results } from "./Results";
@@ -71,6 +72,7 @@ export function Workspace() {
                   <div className="splitter" role="separator" aria-orientation="horizontal" onPointerDown={startDrag} />
                 </>
               )}
+              {doc.table && <FilterBar key={`filters:${conn.id}:${doc.id}`} conn={conn} doc={doc} />}
               <Results key={`${conn.id}:${doc.id}`} conn={conn} doc={doc} />
             </>
           )}

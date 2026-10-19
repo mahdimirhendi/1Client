@@ -4,7 +4,7 @@ import { create } from "zustand";
 import { copyWithFeedback } from "../lib/clipboard";
 import { buildRowEdits, cellKey, editableColumns, type Changes } from "../lib/edit";
 import { NUMERIC_TYPE, sortedRows, type SortDir } from "../lib/sort";
-import { tableSql } from "../lib/sql";
+import { TABLE_ROWS, tableSql, type Filter } from "../lib/sql";
 import { useApp, type ConnTab, type DocTab } from "../store";
 import type { AppError, ResultSet } from "../types";
 import { openMenu } from "./ContextMenu";
@@ -114,7 +114,12 @@ function summary(doc: DocTab, set?: ResultSet) {
   if (doc.running) return "Running…";
   if (!doc.output || !set) return "";
   const n = set.columns.length ? set.rows.length : (set.rowCount ?? 0);
-  const label = set.columns.length ? `${n.toLocaleString()} row${n === 1 ? "" : "s"}` : `${n} affected`;
+  // A table tab stops at TABLE_ROWS; saying "first" keeps that from reading as the table's size.
+  const label = !set.columns.length
+    ? `${n} affected`
+    : doc.table && n === TABLE_ROWS
+      ? `First ${n} rows`
+      : `${n.toLocaleString()} row${n === 1 ? "" : "s"}`;
   return `${label}${set.truncated ? " (first 10,000 shown)" : ""} · ${doc.output.elapsedMs} ms`;
 }
 
@@ -129,7 +134,8 @@ type Editing = { r: number; c: number; draft: string; isNull: boolean };
 function Grid({ conn, doc, set, setIdx }: { conn: ConnTab; doc: DocTab; set: ResultSet; setIdx: number }) {
   const scroller = useRef<HTMLDivElement>(null);
   const saveEdits = useApp((s) => s.saveEdits);
-  const sortTable = useApp((s) => s.sortTable);
+  const setTableView = useApp((s) => s.setTableView);
+  const setDirty = useApp((s) => s.setDirty);
   // Rows are addressed by their index in `set.rows` everywhere (selection, edits); sorting
   // only changes the order they are shown in.
   const [sel, setSel] = useState<[number, number] | null>(null);
@@ -143,15 +149,15 @@ function Grid({ conn, doc, set, setIdx }: { conn: ConnTab; doc: DocTab; set: Res
 
   const cols = useMemo(() => editableColumns(set, conn.schema, conn.profile), [set, conn.schema, conn.profile]);
 
-  // A table tab still running its own query is sorted by the server, so the order covers the
-  // whole table and not just the loaded rows. Any other result sorts the rows it has.
-  const serverSort = !!doc.table && doc.sql === tableSql(conn.profile.engine, doc.table, doc.sort);
+  // A table tab still running its own query is filtered and sorted by the server, so both cover
+  // the whole table and not just the loaded rows. Any other result sorts the rows it has.
+  const serverView = !!doc.table && doc.sql === tableSql(conn.profile.engine, doc.table, doc.view);
 
   /** Display position → row index. */
   const order = useMemo(() => {
-    const s = !serverSort && localSort && set.columns[localSort.col]?.name === localSort.name ? localSort : null;
+    const s = !serverView && localSort && set.columns[localSort.col]?.name === localSort.name ? localSort : null;
     return s ? sortedRows(set, s.col, s.dir) : set.rows.map((_, i) => i);
-  }, [set, localSort, serverSort]);
+  }, [set, localSort, serverView]);
   /** Row index → display position. */
   const position = useMemo(() => {
     const p: number[] = [];
@@ -161,7 +167,7 @@ function Grid({ conn, doc, set, setIdx }: { conn: ConnTab; doc: DocTab; set: Res
 
   const sortDir = (ci: number): SortDir | null => {
     const name = set.columns[ci].name;
-    if (serverSort) return doc.sort?.column === name ? doc.sort.dir : null;
+    if (serverView) return doc.view?.sort?.column === name ? doc.view.sort.dir : null;
     return localSort?.col === ci && localSort.name === name ? localSort.dir : null;
   };
 
@@ -170,10 +176,25 @@ function Grid({ conn, doc, set, setIdx }: { conn: ConnTab; doc: DocTab; set: Res
     const cur = sortDir(ci);
     const dir: SortDir | null = cur === null ? "asc" : cur === "asc" ? "desc" : null;
     const name = set.columns[ci].name;
-    if (!serverSort) return setLocalSort(dir ? { col: ci, name, dir } : null);
+    if (!serverView) return setLocalSort(dir ? { col: ci, name, dir } : null);
     if (changes.size) return setEditError("Save or discard your changes before sorting the table.");
-    sortTable(conn.id, doc.id, dir ? { column: name, dir } : null);
+    setTableView(conn.id, doc.id, { ...doc.view, sort: dir ? { column: name, dir } : undefined });
   };
+
+  /** Show only the rows where this column has (or, with `exclude`, doesn't have) this value. */
+  const filterBy = (ci: number, v: string | null, exclude = false) => {
+    if (changes.size) return setEditError("Save or discard your changes before filtering the table.");
+    const op = v === null ? (exclude ? "notNull" : "isNull") : exclude ? "ne" : "eq";
+    const filter: Filter = { column: set.columns[ci].name, op, value: v ?? "" };
+    // Added to the column filters, so a condition typed in SQL mode makes way for them.
+    setTableView(conn.id, doc.id, { ...doc.view, where: undefined, filters: [...(doc.view?.filters ?? []), filter] });
+  };
+
+  // The filter bar and other tabs need to know about unsaved edits, so they don't run over them.
+  useEffect(() => {
+    setDirty(conn.id, doc.id, changes.size > 0);
+  }, [changes.size, conn.id, doc.id, setDirty]);
+  useEffect(() => () => setDirty(conn.id, doc.id, false), [conn.id, doc.id, setDirty]);
 
   // A new result (re-run, refresh, saved edits) starts clean; the selection stays if it still fits.
   useEffect(() => {
@@ -378,6 +399,13 @@ function Grid({ conn, doc, set, setIdx }: { conn: ConnTab; doc: DocTab; set: Res
                                   ...(changed ? [{ label: "Revert Change", action: () => setCell(r, ci, set.rows[r][ci]) }] : []),
                                   "separator" as const,
                                 ]),
+                            ...(serverView
+                              ? [
+                                  { label: "Filter by This Value", action: () => filterBy(ci, v) },
+                                  { label: "Exclude This Value", action: () => filterBy(ci, v, true) },
+                                  "separator" as const,
+                                ]
+                              : []),
                             { label: "Copy Value", shortcut: "⌘C", action: () => copyWithFeedback(v ?? "NULL", "value") },
                             { label: "Copy Row", action: () => copyWithFeedback(row.map((x) => x ?? "NULL").join("\t"), "row") },
                             {

@@ -19,7 +19,8 @@
     "typecheck": "tsc --noEmit",
     "check:predict": "node --experimental-strip-types src/lib/predict.check.ts",
     "check:sort": "node --experimental-strip-types src/lib/sort.check.ts",
-    "check": "npm run typecheck && npm run check:predict && npm run check:sort",
+    "check:sql": "node --experimental-strip-types src/lib/sql.check.ts",
+    "check": "npm run typecheck && npm run check:predict && npm run check:sort && npm run check:sql",
     "tauri": "tauri",
     "app": "tauri build --bundles app && rm -rf /Applications/1Client.app && cp -R target/release/bundle/macos/1Client.app /Applications/ && echo '1Client installed in /Applications'",
     "dmg": "tauri build --bundles dmg"
