@@ -26,7 +26,7 @@ changes stay consistent. All colors, sizes and radii live in
 ```
 Window
 └── ConnectionTab[]        top bar, one per open connection
-    ├── sidebar            schema tree, grouped by schema, with a filter
+    ├── sidebar            Tables (schema tree, grouped by schema) | Saved | History, with a filter
     ├── tunnel status
     └── DocumentTab[]      inner bar, per connection
         ├── Query          SQL editor and its results
@@ -38,6 +38,8 @@ Window
 - `+` on the connection bar opens the welcome screen; `+` on the inner bar opens a new query.
 - Query tabs are numbered with the lowest free number. Closing the last tab leaves the connection open
   with an empty state.
+- A tab opened from a saved query carries its name; a • after the name means it changed since it was
+  saved, and ⌘S saves it.
 
 ## Connection sheet
 

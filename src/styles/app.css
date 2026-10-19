@@ -404,3 +404,21 @@ input, textarea, .cm-content, .grid-cell, pre { user-select: text; -webkit-user-
 .filter-icon-btn:hover { background: var(--hover); color: var(--label); }
 .filter-actions { flex-shrink: 0; display: flex; align-items: center; gap: 8px; min-height: 24px; }
 .filter-bar + .results { border-top: none; }
+.toast-action { margin-left: 6px; padding: 0 2px; border: none; background: none; color: var(--accent); font-weight: 600; font-size: var(--text-sm); }
+
+/* Sidebar panels: tables, saved queries, history */
+.sidebar-panels { padding: 10px 12px 0; }
+.sidebar-panels .segmented { display: flex; }
+.sidebar-panels .segmented button { flex: 1 1 0; padding: 0 6px; }
+.query-list { display: flex; flex-direction: column; gap: 1px; padding: 2px 0 8px; }
+.query-item { display: flex; flex-direction: column; gap: 3px; padding: 6px 8px; border-radius: 6px; outline: none; }
+.query-item:hover { background: var(--hover); }
+.query-item:focus { background: var(--accent-tint); }
+.query-name { font-size: var(--text-sm); font-weight: 600; }
+.query-sql { font-size: var(--text-xs); color: var(--label-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.query-sql.clamp2 { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; color: var(--label); }
+.query-item.failed .query-sql { color: var(--error-text); }
+.query-meta { font-size: 10.5px; color: var(--label-tertiary); font-variant-numeric: tabular-nums; }
+.query-clear { align-self: flex-start; margin: 8px 8px 0; }
+.sidebar-note { padding: 14px 8px; font-size: var(--text-sm); color: var(--label-secondary); line-height: 1.45; }
+.doc-tab-dot { color: var(--label-secondary); font-size: 15px; line-height: 1; margin-left: -2px; }

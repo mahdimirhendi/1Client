@@ -39,6 +39,8 @@ connection is tagged with its environment so you always know where you are.
 - Next-word suggestions that know your tables, columns and foreign keys
   (`JOIN customers c` → `ON o.customer_id = c.id`); Tab accepts.
 - Run the statement under the cursor (⌘↵), the selection, or everything (⇧⌘↵), or use ▶ in the gutter.
+- **Saved queries and history** in the sidebar, per connection: save a query with ⌘S, and double-click
+  a saved query or anything you ran before to run it again. Search both with the filter box.
 - Errors exactly as the server reports them: code, SQLSTATE, detail, hint, and the position underlined.
 
 **Work with results**
@@ -66,6 +68,7 @@ connection is tagged with its environment so you always know where you are.
 | | Light | Dark |
 |---|---|---|
 | **Query and results** | <img src="docs/screenshots/workspace-light.png" alt="Query editor and results, light"> | <img src="docs/screenshots/workspace-dark.png" alt="Query editor and results, dark"> |
+| **Filters and query history** | <img src="docs/screenshots/filters-light.png" alt="Table filters and the query history, light"> | <img src="docs/screenshots/filters-dark.png" alt="Table filters and the query history, dark"> |
 | **Connection through a bastion** | <img src="docs/screenshots/connection-light.png" alt="Connection sheet with two SSH hops, light"> | <img src="docs/screenshots/connection-dark.png" alt="Connection sheet with two SSH hops, dark"> |
 | **Saved connections** | <img src="docs/screenshots/welcome-light.png" alt="Welcome window, light"> | <img src="docs/screenshots/welcome-dark.png" alt="Welcome window, dark"> |
 
@@ -114,7 +117,7 @@ npm run app        # builds 1Client.app and copies it to /Applications
 | ⇧⌘F / ⌘/ | Format SQL / toggle comment |
 | ↩ or double-click | Edit the selected cell |
 | ⌘⌫ | Set the selected cell to `NULL` |
-| ⌘S | Save edited cells |
+| ⌘S | Save the query (in the editor) or the edited cells (in the grid) |
 | ⌘C | Copy the selected cell |
 
 ## Open a database from another app
@@ -149,6 +152,7 @@ Links and passwords are never written to logs.
 |---|---|
 | `connections.json` | Saved connections, without passwords |
 | `environments.json` | Your environment tags |
+| `saved_queries.json`, `history.json` | Saved queries, and the queries you ran (the latest 500 per connection) |
 | `vault.json`, `vault.key` | Passwords and key passphrases, encrypted with ChaCha20-Poly1305; readable only by your user |
 
 The vault keeps passwords out of plain-text files and backups, but its key lives next to it, so

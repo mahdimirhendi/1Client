@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { useApp } from "../store";
 import { AppIcon, EngineBadge, IconPlus, IconSearch } from "./Icons";
 import { EnvTag } from "./EnvTag";
+import { timeAgo } from "../lib/time";
 
 function describe(p: ReturnType<typeof useApp.getState>["profiles"][number]) {
   const engine = p.engine === "postgres" ? "PostgreSQL" : "MySQL";
@@ -11,13 +12,6 @@ function describe(p: ReturnType<typeof useApp.getState>["profiles"][number]) {
   return `${engine} · ${p.host}${via}`;
 }
 
-function ago(ts?: number | null) {
-  if (!ts) return "";
-  const s = Date.now() / 1000 - ts;
-  if (s < 3600) return `${Math.max(1, Math.round(s / 60))} min ago`;
-  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
-  return new Date(ts * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
 
 export function Welcome() {
   const { profiles, openConnection, setSheet, connecting, connectError, conns, setShowWelcome, deleteProfile } = useApp();
@@ -121,7 +115,7 @@ export function Welcome() {
                   </button>
                 </div>
               )}
-              <span className="muted small when">{ago(p.lastUsedAt)}</span>
+              <span className="muted small when">{p.lastUsedAt ? timeAgo(p.lastUsedAt * 1000) : ""}</span>
             </div>
           ))}
         </div>

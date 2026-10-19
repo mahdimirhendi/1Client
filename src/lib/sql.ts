@@ -214,6 +214,14 @@ export function tableSql(engine: Engine, table: TableRef, view: TableView = {}):
   return `SELECT * FROM ${from}${where ? ` WHERE ${where}` : ""}${order} LIMIT ${TABLE_ROWS};`;
 }
 
+/** A name to offer when saving a query: a leading `-- comment`, or else the first line of the SQL. */
+export function queryName(sql: string): string {
+  const first = sql.trim().split("\n")[0]?.trim() ?? "";
+  const comment = /^--\s*(.+)$/.exec(first)?.[1];
+  const name = (comment ?? first).replace(/[;,]+$/, "").replace(/\s+/g, " ").trim();
+  return name.length > 60 ? `${name.slice(0, 59)}…` : name;
+}
+
 /** Fill a profile from `postgres://user:pass@host:5432/db?sslmode=require` or `mysql://…`. */
 export function parseConnectionUrl(
   url: string,

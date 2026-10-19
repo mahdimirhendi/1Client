@@ -7,6 +7,7 @@ work; a React UI runs in the system WebView and talks to it through Tauri comman
 React UI (src/)  ──invoke──▶  src-tauri (commands, app state)  ──▶  crates/core
                                                                  ├─ store.rs         saved connections (JSON)
                                                                  ├─ environments.rs  environment tags (JSON)
+                                                                 ├─ queries.rs       query history and saved queries (JSON)
                                                                  ├─ secrets.rs       encrypted vault + 1Password CLI
                                                                  ├─ known_hosts.rs   OpenSSH-compatible host key checks
                                                                  ├─ tunnel.rs        SSH chain → local port
@@ -66,6 +67,12 @@ by a command-line tool.
   text alphabetically.
 - **Errors.** One `Error` type, serialised to the UI as `{ kind, message, … }`. Server errors keep every
   field (code, SQLSTATE, detail, hint, position); `unknownHostKey` carries the key for "Trust and Retry".
+- **History and saved queries.** Both are kept per connection in the app's data folder and removed
+  with the connection. A run from a query tab is recorded by the backend after it finishes, with its
+  time, duration, rows or error; table browsing is not recorded, nor are connections opened from a
+  link until they are saved. Running the same SQL again moves it to the top instead of adding a copy,
+  and each connection keeps its latest 500 runs. A file that can't be read is moved aside
+  (`*.json.invalid`) rather than stopping the app.
 - **Links.** `oneclient://open?url=…` and plain database URLs open a temporary connection, kept in
   memory with its password until the user saves it. Links are never logged and parse errors never
   contain the password.

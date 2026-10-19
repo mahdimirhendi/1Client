@@ -17,6 +17,11 @@ export function DocTabs({ conn }: { conn: ConnTab }) {
                 <IconFile color={on ? "var(--accent)" : "var(--label-secondary)"} />
               )}
               <span>{d.title}</span>
+              {d.savedId && conn.saved?.find((q) => q.id === d.savedId)?.sql !== d.sql && (
+                <span className="doc-tab-dot" title="Changed since it was saved (⌘S saves)">
+                  •
+                </span>
+              )}
               {d.running && <span className="spinner" aria-label="Running" />}
             </button>
             <button className="tab-close" aria-label={`Close ${d.title}`} onClick={() => closeDoc(conn.id, d.id)}>

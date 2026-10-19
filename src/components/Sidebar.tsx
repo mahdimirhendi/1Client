@@ -3,8 +3,28 @@ import { useApp, type ConnTab } from "../store";
 import type { TableInfo } from "../types";
 import { AppearanceSwitch } from "./AppearanceSwitch";
 import { IconChevron, IconSearch, IconTable } from "./Icons";
+import { HistoryList, SavedList } from "./QueryLists";
 
 const COLLAPSED_KEY = "oneclient.collapsedSchemas.";
+const PANEL_KEY = "oneclient.sidebarPanel";
+
+type Panel = "tables" | "saved" | "history";
+const PANELS: [Panel, string][] = [
+  ["tables", "Tables"],
+  ["saved", "Saved"],
+  ["history", "History"],
+];
+const FILTER_LABEL: Record<Panel, string> = { tables: "Filter tables", saved: "Filter saved queries", history: "Filter history" };
+
+/** The panel shown last time, on this device. */
+function rememberedPanel(): Panel {
+  try {
+    const v = localStorage.getItem(PANEL_KEY);
+    return v === "saved" || v === "history" ? v : "tables";
+  } catch {
+    return "tables";
+  }
+}
 
 /** Collapsed schema groups, remembered per saved connection. */
 function useCollapsedSchemas(profileId: string) {
@@ -31,9 +51,20 @@ function useCollapsedSchemas(profileId: string) {
 
 export function Sidebar({ conn }: { conn: ConnTab }) {
   const { openTable, refreshSchema } = useApp();
+  const [panel, setPanel] = useState<Panel>(rememberedPanel);
   const [filter, setFilter] = useState("");
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const { collapsed, toggle } = useCollapsedSchemas(conn.profile.id);
+
+  const showPanel = (p: Panel) => {
+    setPanel(p);
+    setFilter("");
+    try {
+      localStorage.setItem(PANEL_KEY, p);
+    } catch {
+      /* per-device convenience only */
+    }
+  };
 
   // Tables grouped by schema, schemas in the order the server listed them (alphabetical).
   const groups = useMemo(() => {
@@ -50,17 +81,38 @@ export function Sidebar({ conn }: { conn: ConnTab }) {
 
   return (
     <aside className="sidebar">
+      <div className="sidebar-panels">
+        <div className="segmented small" role="tablist" aria-label="Sidebar">
+          {PANELS.map(([p, label]) => (
+            <button key={p} role="tab" aria-selected={panel === p} className={panel === p ? "on" : ""} onClick={() => showPanel(p)}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
       <div className="sidebar-top">
         <label className="search-field">
           <IconSearch size={11} color="var(--label-secondary)" />
-          <input aria-label="Filter tables" placeholder="Filter" value={filter} onChange={(e) => setFilter(e.target.value)} />
+          <input aria-label={FILTER_LABEL[panel]} placeholder="Filter" value={filter} onChange={(e) => setFilter(e.target.value)} />
         </label>
-        <button className="btn tiny" title="Reload schema" onClick={() => refreshSchema(conn.id)}>
-          ↻
-        </button>
+        {panel === "tables" && (
+          <button className="btn tiny" title="Reload schema" onClick={() => refreshSchema(conn.id)}>
+            ↻
+          </button>
+        )}
       </div>
 
-      <div className="tree">
+      {panel === "saved" && (
+        <div className="tree">
+          <SavedList conn={conn} filter={filter} />
+        </div>
+      )}
+      {panel === "history" && (
+        <div className="tree">
+          <HistoryList conn={conn} filter={filter} />
+        </div>
+      )}
+      <div className="tree" hidden={panel !== "tables"}>
         {!conn.schema && !conn.schemaError && <div className="muted small pad">Loading schema…</div>}
         {conn.schemaError && <div className="error-text small pad">{conn.schemaError.message}</div>}
         {conn.schema && groups.length === 0 && (

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
-use crate::{ConnectionProfile, Error, Result};
+use crate::{json_file, ConnectionProfile, Result};
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 struct FileFormat {
@@ -23,15 +23,7 @@ impl ConnectionStore {
     pub fn open(dir: &Path) -> Result<Self> {
         std::fs::create_dir_all(dir)?;
         let path = dir.join("connections.json");
-        let profiles = match std::fs::read(&path) {
-            Ok(bytes) => {
-                serde_json::from_slice::<FileFormat>(&bytes)
-                    .map_err(|e| Error::Config(format!("{} is not valid: {e}", path.display())))?
-                    .connections
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-            Err(e) => return Err(e.into()),
-        };
+        let profiles = json_file::read::<FileFormat>(&path)?.map(|f| f.connections).unwrap_or_default();
         Ok(Self { path, profiles })
     }
 
@@ -82,14 +74,8 @@ impl ConnectionStore {
         self.flush()
     }
 
-    /// Write atomically: temp file, then rename.
     fn flush(&self) -> Result<()> {
-        let data = FileFormat { version: 1, connections: self.profiles.clone() };
-        let json = serde_json::to_vec_pretty(&data).map_err(|e| Error::Config(e.to_string()))?;
-        let tmp = self.path.with_extension("json.tmp");
-        std::fs::write(&tmp, json)?;
-        std::fs::rename(&tmp, &self.path)?;
-        Ok(())
+        json_file::write(&self.path, &FileFormat { version: 1, connections: self.profiles.clone() })
     }
 }
 

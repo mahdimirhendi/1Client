@@ -1,13 +1,14 @@
 import { useEffect } from "react";
 import { useToast } from "../lib/toast";
 
-/** Short confirmations ("Copied 250 rows as JSON") at the bottom of the window. */
+/** Short confirmations ("Copied 250 rows as JSON") at the bottom of the window, some with Undo. */
 export function ToastHost() {
   const { toast, dismiss } = useToast();
 
   useEffect(() => {
     if (!toast) return;
-    const t = setTimeout(dismiss, toast.tone === "error" ? 5000 : 1800);
+    // Errors and toasts with a button stay longer, so there is time to read or click.
+    const t = setTimeout(dismiss, toast.tone === "error" || toast.action ? 5000 : 1800);
     return () => clearTimeout(t);
   }, [toast, dismiss]);
 
@@ -18,6 +19,18 @@ export function ToastHost() {
         {toast.tone === "error" ? "!" : "✓"}
       </span>
       {toast.message}
+      {toast.action && (
+        <button
+          className="toast-action"
+          onClick={(e) => {
+            e.stopPropagation();
+            toast.action!.run();
+            dismiss();
+          }}
+        >
+          {toast.action.label}
+        </button>
+      )}
     </div>
   );
 }

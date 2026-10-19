@@ -273,6 +273,7 @@ export function QueryEditor({ conn, doc }: { conn: ConnTab; doc: DocTab }) {
           { key: "Mod-Enter", run: () => (runner("statement"), true) },
           { key: "Shift-Mod-Enter", run: () => (runner("all"), true) },
           { key: "Shift-Mod-f", run: () => (command("format"), true) },
+          { key: "Mod-s", run: () => (useApp.getState().saveDoc(conn.id, doc.id), true) },
           { key: "Mod-/", run: toggleComment },
           ...searchKeymap,
           ...closeBracketsKeymap,
@@ -346,6 +347,7 @@ export function QueryEditor({ conn, doc }: { conn: ConnTab; doc: DocTab }) {
     openMenu(e, [
       { label: selected ? "Run Selection" : "Run Statement", shortcut: "⌘↵", action: () => runActive("statement") },
       { label: "Run All", shortcut: "⇧⌘↵", action: () => runActive("all") },
+      { label: "Save Query…", shortcut: "⌘S", action: () => useApp.getState().saveDoc(conn.id, doc.id) },
       "separator",
       { label: "Cut", shortcut: "⌘X", disabled: !selected, action: () => (copyText(selected), replace("")) },
       { label: "Copy", shortcut: "⌘C", disabled: !selected, action: () => copyText(selected) },
@@ -360,7 +362,7 @@ export function QueryEditor({ conn, doc }: { conn: ConnTab; doc: DocTab }) {
   return (
     <div className="editor-frame">
       <div className="editor-host" ref={host} onContextMenu={onContextMenu} />
-      <EditorStatus engine={conn.profile.engine} />
+      <EditorStatus engine={conn.profile.engine} onSave={() => useApp.getState().saveDoc(conn.id, doc.id)} />
     </div>
   );
 }
@@ -386,10 +388,13 @@ function formatIn(v: EditorView, engine: string) {
   }
 }
 
-function EditorStatus({ engine }: { engine: string }) {
+function EditorStatus({ engine, onSave }: { engine: string; onSave: () => void }) {
   const { line, col, selected, statements } = useEditorStatus();
   return (
     <div className="editor-status">
+      <button className="editor-status-btn" onClick={onSave} title="Save this query (⌘S)">
+        Save
+      </button>
       <button className="editor-status-btn" onClick={() => editorCommand("format")} title="Format SQL (⇧⌘F)">
         Format
       </button>

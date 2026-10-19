@@ -3,6 +3,7 @@ import { ConfirmWrite } from "./components/ConfirmWrite";
 import { ContextMenuHost } from "./components/ContextMenu";
 import { EnvironmentsSheet } from "./components/EnvironmentsSheet";
 import { ConnectionSheet } from "./components/ConnectionSheet";
+import { SaveQuerySheet } from "./components/SaveQuerySheet";
 import { ToastHost } from "./components/Toast";
 import { Welcome } from "./components/Welcome";
 import { Workspace } from "./components/Workspace";
@@ -13,7 +14,7 @@ import { useAppearance, type Appearance } from "./lib/theme";
 import { useApp } from "./store";
 
 export default function App() {
-  const { showWelcome, conns, sheet, setSheet, loadProfiles, activeConn, newQuery, closeDoc, envSheet } = useApp();
+  const { showWelcome, conns, sheet, setSheet, loadProfiles, activeConn, newQuery, closeDoc, envSheet, saveSheet } = useApp();
 
   useEffect(() => {
     loadProfiles();
@@ -125,6 +126,7 @@ export default function App() {
       {showWelcome || conns.length === 0 ? <Welcome /> : <Workspace />}
       {sheet && <ConnectionSheet key={sheet.mode === "edit" ? sheet.profile.id : "new"} />}
       {envSheet && <EnvironmentsSheet />}
+      {saveSheet && <SaveQuerySheet sheet={saveSheet} />}
       <ConfirmWrite />
       <ContextMenuHost />
       <ToastHost />

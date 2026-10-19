@@ -1,7 +1,18 @@
 import { create } from "zustand";
 import { api } from "./api";
-import { isWrite, splitStatements, tableSql, type TableRef, type TableView } from "./lib/sql";
-import type { AppError, ConnectionProfile, EnvironmentDef, QueryOutput, RowEdit, SessionInfo, TableInfo } from "./types";
+import { isWrite, queryName, splitStatements, tableSql, type TableRef, type TableView } from "./lib/sql";
+import { showToast } from "./lib/toast";
+import type {
+  AppError,
+  ConnectionProfile,
+  EnvironmentDef,
+  HistoryEntry,
+  QueryOutput,
+  RowEdit,
+  SavedQuery,
+  SessionInfo,
+  TableInfo,
+} from "./types";
 
 /** A tab inside a connection: a query, or a table opened from the sidebar. */
 export interface DocTab {
@@ -22,6 +33,8 @@ export interface DocTab {
   view?: TableView;
   /** The grid has edits that are not saved yet. */
   dirty?: boolean;
+  /** Query tabs opened from (or saved as) a saved query: ⌘S updates that query. */
+  savedId?: string;
 }
 
 /** A top-level tab: one open connection with its own inner tabs. */
@@ -35,9 +48,22 @@ export interface ConnTab {
   activeDoc: string;
   schema?: TableInfo[];
   schemaError?: AppError;
+  /** Queries run on this connection, newest first. */
+  history?: HistoryEntry[];
+  /** Saved queries of this connection, by name. */
+  saved?: SavedQuery[];
 }
 
 export type Sheet = { mode: "new" } | { mode: "edit"; profile: ConnectionProfile } | null;
+
+/** The "Save Query" dialog, for a tab's SQL (`docId`) or SQL from the history. `id` renames or updates. */
+export interface SaveSheet {
+  connId: string;
+  sql: string;
+  name: string;
+  docId?: string;
+  id?: string;
+}
 
 export interface PendingWrite {
   connId: string;
@@ -64,6 +90,7 @@ interface State {
   envSheet: boolean;
   /** Connections opened from links, not saved. Keyed by profile id. */
   temporary: Record<string, ConnectionProfile>;
+  saveSheet: SaveSheet | null;
 
   loadProfiles(): Promise<void>;
   loadEnvironments(): Promise<void>;
@@ -91,6 +118,19 @@ interface State {
   /** Filter and sort a table tab on the server, and run its new query. */
   setTableView(connId: string, docId: string, view: TableView): void;
   setDirty(connId: string, docId: string, dirty: boolean): void;
+
+  loadHistory(connId: string): Promise<void>;
+  loadSaved(connId: string): Promise<void>;
+  /** Open SQL in a query tab (the tab of a saved query when it is open already), and run it if asked. */
+  openQuery(connId: string, sql: string, opts?: { title?: string; savedId?: string; run?: boolean }): void;
+  /** ⌘S in a query tab: update the saved query it belongs to, or ask for a name. */
+  saveDoc(connId: string, docId: string): void;
+  setSaveSheet(sheet: SaveSheet | null): void;
+  /** Add or update a saved query; `docId` links that tab to it. Throws the server's error. */
+  saveQuery(connId: string, query: { id?: string; name: string; sql: string }, docId?: string): Promise<SavedQuery>;
+  deleteSavedQuery(connId: string, id: string): Promise<void>;
+  deleteHistory(connId: string, id: string): Promise<void>;
+  clearHistory(connId: string): Promise<void>;
   setSql(connId: string, docId: string, sql: string): void;
   run(connId: string, docId: string, sql: string, confirmed?: boolean): Promise<void>;
   setPendingWrite(p: PendingWrite | null): void;
@@ -111,6 +151,8 @@ function nextQueryTitle(docs: DocTab[]): string {
 function queryDoc(docs: DocTab[], sql = ""): DocTab {
   return { id: uid(), kind: "query", title: nextQueryTitle(docs), sql, running: false, showEditor: true };
 }
+
+const byName = (a: SavedQuery, b: SavedQuery) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
 
 /** The schema a connection works in by default; its tables are shown without a schema prefix. */
 function defaultSchema(profile: ConnectionProfile): string {
@@ -133,6 +175,7 @@ export const useApp = create<State>((set, get) => ({
   connectError: null,
   pendingWrite: null,
   temporary: {},
+  saveSheet: null,
   environments: [],
   envSheet: false,
 
@@ -180,6 +223,8 @@ export const useApp = create<State>((set, get) => ({
       const tab: ConnTab = { id: info.sessionId, profile, info, docs: [first], activeDoc: first.id };
       set((s) => ({ conns: [...s.conns, tab], activeConn: tab.id, showWelcome: false, connecting: null }));
       get().refreshSchema(tab.id);
+      get().loadHistory(tab.id);
+      get().loadSaved(tab.id);
       get().loadProfiles();
     } catch (e) {
       set({ connecting: null, connectError: e as AppError });
@@ -322,18 +367,122 @@ export const useApp = create<State>((set, get) => ({
   async run(connId, docId, sql, confirmed = false) {
     const conn = get().conns.find((c) => c.id === connId);
     if (!conn || !sql.trim()) return;
+    // What runs from a query tab goes into the history; browsing a table doesn't.
+    const record = conn.docs.find((d) => d.id === docId)?.kind === "query";
     if (!confirmed && conn.profile.confirmWrites && splitStatements(sql).some((s) => isWrite(s.text))) {
       set({ pendingWrite: { connId, docId, sql } });
       return;
     }
     set((s) => ({ conns: patchDoc(s.conns, connId, docId, { running: true, error: undefined }) }));
     try {
-      const output = await api.runQuery(connId, sql);
+      const output = await api.runQuery(connId, sql, record);
       set((s) => ({ conns: patchDoc(s.conns, connId, docId, { running: false, output, lastRun: sql }) }));
       if (splitStatements(sql).some((s) => /^\s*(create|alter|drop|rename)\b/i.test(s.text))) get().refreshSchema(connId);
     } catch (e) {
       set((s) => ({ conns: patchDoc(s.conns, connId, docId, { running: false, error: e as AppError, lastRun: sql }) }));
     }
+    if (record) get().loadHistory(connId);
+  },
+
+  async loadHistory(connId) {
+    const conn = get().conns.find((c) => c.id === connId);
+    if (!conn) return;
+    const history = await api.listHistory(conn.profile.id).catch(() => conn.history ?? []);
+    set((s) => ({ conns: s.conns.map((c) => (c.id === connId ? { ...c, history } : c)) }));
+  },
+
+  async loadSaved(connId) {
+    const conn = get().conns.find((c) => c.id === connId);
+    if (!conn) return;
+    const saved = await api.listSavedQueries(conn.profile.id).catch(() => conn.saved ?? []);
+    set((s) => ({ conns: s.conns.map((c) => (c.id === connId ? { ...c, saved } : c)) }));
+  },
+
+  openQuery(connId, sql, opts = {}) {
+    const conn = get().conns.find((c) => c.id === connId);
+    if (!conn) return;
+    const open = opts.savedId ? conn.docs.find((d) => d.savedId === opts.savedId) : undefined;
+    const doc = open ?? { ...queryDoc(conn.docs, sql), ...(opts.title ? { title: opts.title } : {}), savedId: opts.savedId };
+    set((s) => ({
+      conns: s.conns.map((c) => (c.id !== connId ? c : { ...c, docs: open ? c.docs : [...c.docs, doc], activeDoc: doc.id })),
+    }));
+    if (opts.run) get().run(connId, doc.id, doc.sql);
+  },
+
+  saveDoc(connId, docId) {
+    const conn = get().conns.find((c) => c.id === connId);
+    const doc = conn?.docs.find((d) => d.id === docId);
+    if (!conn || !doc) return;
+    if (!doc.sql.trim()) return showToast("Write some SQL first, then save it.", "error");
+    const linked = conn.saved?.find((q) => q.id === doc.savedId);
+    if (!linked) return set({ saveSheet: { connId, docId, sql: doc.sql, name: queryName(doc.sql) } });
+    get()
+      .saveQuery(connId, { id: linked.id, name: linked.name, sql: doc.sql }, docId)
+      .then((q) => showToast(`Saved “${q.name}”`))
+      .catch((e: AppError) => showToast(`Couldn't save: ${e.message}`, "error"));
+  },
+
+  setSaveSheet(saveSheet) {
+    set({ saveSheet });
+  },
+
+  async saveQuery(connId, query, docId) {
+    const conn = get().conns.find((c) => c.id === connId);
+    if (!conn) throw { kind: "noSession", message: "This connection is closed" } satisfies AppError;
+    const saved = await api.saveQuery({
+      id: query.id ?? uid(),
+      profileId: conn.profile.id,
+      name: query.name,
+      sql: query.sql,
+      updatedAt: 0,
+    });
+    set((s) => ({
+      conns: s.conns.map((c) =>
+        c.id !== connId
+          ? c
+          : {
+              ...c,
+              saved: [...(c.saved ?? []).filter((q) => q.id !== saved.id), saved].sort(byName),
+              // The saving tab, and any tab already showing this query, take its name.
+              docs: c.docs.map((d) => (d.id === docId || d.savedId === saved.id ? { ...d, savedId: saved.id, title: saved.name } : d)),
+            },
+      ),
+    }));
+    return saved;
+  },
+
+  async deleteSavedQuery(connId, id) {
+    const conn = get().conns.find((c) => c.id === connId);
+    const query = conn?.saved?.find((q) => q.id === id);
+    if (!conn || !query) return;
+    await api.deleteSavedQuery(id);
+    set((s) => ({
+      conns: s.conns.map((c) =>
+        c.id !== connId
+          ? c
+          : {
+              ...c,
+              saved: (c.saved ?? []).filter((q) => q.id !== id),
+              docs: c.docs.map((d) => (d.savedId === id ? { ...d, savedId: undefined } : d)),
+            },
+      ),
+    }));
+    showToast(`Deleted “${query.name}”`, "ok", {
+      label: "Undo",
+      run: () => get().saveQuery(connId, query).catch((e: AppError) => showToast(`Couldn't restore: ${e.message}`, "error")),
+    });
+  },
+
+  async deleteHistory(connId, id) {
+    await api.deleteHistory(id);
+    set((s) => ({ conns: s.conns.map((c) => (c.id === connId ? { ...c, history: c.history?.filter((e) => e.id !== id) } : c)) }));
+  },
+
+  async clearHistory(connId) {
+    const conn = get().conns.find((c) => c.id === connId);
+    if (!conn) return;
+    await api.clearHistory(conn.profile.id);
+    set((s) => ({ conns: s.conns.map((c) => (c.id === connId ? { ...c, history: [] } : c)) }));
   },
 
   setPendingWrite(p) {

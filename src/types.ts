@@ -99,6 +99,29 @@ export interface TableInfo {
   columns: ColumnInfo[];
 }
 
+/** A query run from a query tab, kept per connection. Mirrors crates/core/src/queries.rs. */
+export interface HistoryEntry {
+  id: string;
+  profileId: string;
+  sql: string;
+  /** Unix time in milliseconds. */
+  ranAt: number;
+  elapsedMs: number;
+  /** Rows returned or changed by the last statement, when it succeeded. */
+  rows: number | null;
+  /** What went wrong, when it failed. */
+  error: string | null;
+}
+
+export interface SavedQuery {
+  id: string;
+  profileId: string;
+  name: string;
+  sql: string;
+  /** Unix time in milliseconds of the last save. */
+  updatedAt: number;
+}
+
 export interface SessionInfo {
   sessionId: string;
   profileId: string;

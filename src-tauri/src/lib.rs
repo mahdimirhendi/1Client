@@ -12,8 +12,8 @@ use oneclient_core::link::{parse_link, IncomingConnection};
 use oneclient_core::secrets::{ProfileSecrets, SecretStore};
 use oneclient_core::steps::{Step, StepStatus};
 use oneclient_core::{
-    tunnel, ConnectionProfile, ConnectionStore, EnvironmentDef, EnvironmentStore, Error, QueryOutput, SecretsInput,
-    Session, SessionInfo, TableInfo, TestReport,
+    tunnel, ConnectionProfile, ConnectionStore, EnvironmentDef, EnvironmentStore, Error, HistoryEntry, QueryOutput,
+    QueryStore, SavedQuery, SecretsInput, Session, SessionInfo, TableInfo, TestReport,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::{Mutex, RwLock};
@@ -24,6 +24,7 @@ type CmdResult<T> = Result<T, Error>;
 struct AppState {
     store: Mutex<ConnectionStore>,
     environments: Mutex<EnvironmentStore>,
+    queries: Mutex<QueryStore>,
     secrets: SecretStore,
     sessions: RwLock<HashMap<Uuid, Arc<Session>>>,
     /// Connections opened from links: kept in memory only, until the user saves them.
@@ -148,6 +149,7 @@ async fn save_connection(
 async fn delete_connection(state: State<'_, AppState>, id: Uuid) -> CmdResult<()> {
     if let Some(p) = state.store.lock().await.remove(id)? {
         state.secrets.forget(&p)?;
+        state.queries.lock().await.forget(id)?;
     }
     Ok(())
 }
@@ -229,9 +231,60 @@ async fn close_session(state: State<'_, AppState>, session_id: Uuid) -> CmdResul
     Ok(())
 }
 
+/// Run SQL. With `record`, the run is kept in the connection's history (query tabs do this;
+/// browsing a table doesn't). Connections opened from a link and not saved keep no history.
 #[tauri::command]
-async fn run_query(state: State<'_, AppState>, session_id: Uuid, sql: String) -> CmdResult<QueryOutput> {
-    state.session(session_id).await?.run(&sql).await
+async fn run_query(
+    state: State<'_, AppState>,
+    session_id: Uuid,
+    sql: String,
+    record: Option<bool>,
+) -> CmdResult<QueryOutput> {
+    let session = state.session(session_id).await?;
+    let started = Instant::now();
+    let result = session.run(&sql).await;
+    let profile_id = session.profile.id;
+    if record.unwrap_or(false) && state.store.lock().await.get(profile_id).is_some() {
+        let elapsed = started.elapsed().as_millis() as u64;
+        let entry = HistoryEntry::of_run(profile_id, &sql, elapsed, &result);
+        // The query ran either way; a history that can't be written only costs the entry.
+        if let Err(e) = state.queries.lock().await.record(entry) {
+            tracing::warn!("query history not saved: {e}");
+        }
+    }
+    result
+}
+
+// ---------- History and saved queries ----------
+
+#[tauri::command]
+async fn list_history(state: State<'_, AppState>, profile_id: Uuid) -> CmdResult<Vec<HistoryEntry>> {
+    Ok(state.queries.lock().await.history(profile_id))
+}
+
+#[tauri::command]
+async fn delete_history(state: State<'_, AppState>, id: Uuid) -> CmdResult<()> {
+    state.queries.lock().await.delete_history(id)
+}
+
+#[tauri::command]
+async fn clear_history(state: State<'_, AppState>, profile_id: Uuid) -> CmdResult<()> {
+    state.queries.lock().await.clear_history(profile_id)
+}
+
+#[tauri::command]
+async fn list_saved_queries(state: State<'_, AppState>, profile_id: Uuid) -> CmdResult<Vec<SavedQuery>> {
+    Ok(state.queries.lock().await.saved(profile_id))
+}
+
+#[tauri::command]
+async fn save_query(state: State<'_, AppState>, query: SavedQuery) -> CmdResult<SavedQuery> {
+    state.queries.lock().await.save(query)
+}
+
+#[tauri::command]
+async fn delete_saved_query(state: State<'_, AppState>, id: Uuid) -> CmdResult<()> {
+    state.queries.lock().await.delete_saved(id)
 }
 
 /// Light, dark or follow macOS: sets the window (title bar, native controls) and the menu checkmark.
@@ -298,9 +351,11 @@ pub fn run() {
             let store = ConnectionStore::open(&dir)?;
             let secrets = SecretStore::open(&dir)?;
             let environments = EnvironmentStore::open(&dir)?;
+            let queries = QueryStore::open(&dir)?;
             app.manage(AppState {
                 store: Mutex::new(store),
                 environments: Mutex::new(environments),
+                queries: Mutex::new(queries),
                 secrets,
                 sessions: RwLock::new(HashMap::new()),
                 temp: Default::default(),
@@ -348,6 +403,12 @@ pub fn run() {
             open_session,
             close_session,
             run_query,
+            list_history,
+            delete_history,
+            clear_history,
+            list_saved_queries,
+            save_query,
+            delete_saved_query,
             introspect,
             apply_edits,
             set_appearance,

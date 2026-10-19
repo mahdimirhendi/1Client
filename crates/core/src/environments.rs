@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::{default_environments, EnvironmentDef, Error, Result};
+use crate::{default_environments, json_file, EnvironmentDef, Error, Result};
 
 pub struct EnvironmentStore {
     path: PathBuf,
@@ -13,12 +13,7 @@ impl EnvironmentStore {
     pub fn open(dir: &Path) -> Result<Self> {
         std::fs::create_dir_all(dir)?;
         let path = dir.join("environments.json");
-        let list: Vec<EnvironmentDef> = match std::fs::read(&path) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .map_err(|e| Error::Config(format!("{} is not valid: {e}", path.display())))?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-            Err(e) => return Err(e.into()),
-        };
+        let list: Vec<EnvironmentDef> = json_file::read(&path)?.unwrap_or_default();
         // The app always needs at least one environment (see `fallback_id`).
         let list = if list.is_empty() { default_environments() } else { list };
         Ok(Self { path, list })
@@ -48,10 +43,7 @@ impl EnvironmentStore {
         if ids.len() != list.len() {
             return Err(Error::Config("Two environments share the same id".into()));
         }
-        let json = serde_json::to_vec_pretty(&list).map_err(|e| Error::Config(e.to_string()))?;
-        let tmp = self.path.with_extension("json.tmp");
-        std::fs::write(&tmp, json)?;
-        std::fs::rename(&tmp, &self.path)?;
+        json_file::write(&self.path, &list)?;
         self.list = list;
         Ok(())
     }

@@ -1,6 +1,6 @@
-// Quick check of the SQL helpers (table filters and table queries): npm run check:sql
+// Quick check of the SQL helpers (table filters, table queries, saved query names): npm run check:sql
 import assert from "node:assert/strict";
-import { sqlLiteral, tableSql, whereSql, type Filter } from "./sql.ts";
+import { queryName, sqlLiteral, tableSql, whereSql, type Filter } from "./sql.ts";
 
 const f = (column: string, op: Filter["op"], value = ""): Filter => ({ column, op, value });
 const pg = (...filters: Filter[]) => whereSql("postgres", filters);
@@ -52,5 +52,11 @@ assert.equal(
   `SELECT * FROM "public"."orders" WHERE created_at > now() - interval '7 days' LIMIT 200;`,
 );
 assert.equal(tableSql("postgres", table, { where: "   " }), `SELECT * FROM "public"."orders" LIMIT 200;`);
+
+// Names offered when saving a query.
+assert.equal(queryName("-- Top customers by revenue\nSELECT 1"), "Top customers by revenue");
+assert.equal(queryName("  select *\n  from orders;"), "select *");
+assert.equal(queryName("SELECT id, name,\nFROM t"), "SELECT id, name");
+assert.equal(queryName("x".repeat(80)).length, 60);
 
 console.log("sql: all checks passed");

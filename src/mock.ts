@@ -1,6 +1,16 @@
 // A small in-memory backend so the UI runs in a normal browser (`npm run dev`) for design work
 // and screenshots. Never used inside the Tauri app. All data is made up.
-import type { ColumnMeta, ConnectionProfile, QueryOutput, RowEdit, SessionInfo, TableInfo, TestReport } from "./types";
+import type {
+  ColumnMeta,
+  ConnectionProfile,
+  HistoryEntry,
+  QueryOutput,
+  RowEdit,
+  SavedQuery,
+  SessionInfo,
+  TableInfo,
+  TestReport,
+} from "./types";
 
 const profiles: ConnectionProfile[] = [
   {
@@ -216,6 +226,73 @@ function tableQuery(sql: string): QueryOutput | null {
   return { sets: [{ columns, rows: rows.slice(0, 200), rowCount: Math.min(rows.length, 200), truncated: false }], elapsedMs: 14 };
 }
 
+/** What the mock answers to SQL typed in a query tab. Throws like the backend on errors. */
+function runSql(sql: string): QueryOutput {
+  const bad = sql.indexOf("totl");
+  if (bad >= 0)
+    throw {
+      kind: "database",
+      message: 'ERROR:  column "totl" does not exist',
+      db: { engine: "postgres", code: null, sqlstate: "42703", severity: "ERROR", message: 'column "totl" does not exist', detail: null, hint: 'Perhaps you meant to reference the column "orders.total".', position: bad + 1 },
+    };
+  const fromTable = tableQuery(sql);
+  if (fromTable) return fromTable;
+  if (/^\s*(update|delete|insert)/i.test(sql)) {
+    return { sets: [{ columns: [], rows: [], rowCount: 3, truncated: false }], elapsedMs: 9 } satisfies QueryOutput;
+  }
+  // Anything else: customers with their revenue, best first.
+  const src = (column: string) => ({ schema: "public", table: "customers", column });
+  const rows = customers
+    .map((c) => [c[0], c[1], c[2], c[3], revenueByCustomer(c[0])])
+    .sort((a, b) => Number(b[4]) - Number(a[4]));
+  return {
+    sets: [
+      {
+        columns: [
+          { name: "id", typeName: "int8", source: src("id") },
+          { name: "name", typeName: "text", source: src("name") },
+          { name: "email", typeName: "text", source: src("email") },
+          { name: "tier", typeName: "text", source: src("tier") },
+          { name: "revenue", typeName: "numeric" },
+        ],
+        rows,
+        rowCount: rows.length,
+        truncated: false,
+      },
+    ],
+    elapsedMs: 38,
+  } satisfies QueryOutput;
+}
+
+// ---------- History and saved queries ----------
+
+const SHOP = "11111111-1111-4111-8111-111111111111";
+const minutesAgo = (m: number) => Date.now() - m * 60_000;
+const sessions = new Map<string, string>();
+
+let history: HistoryEntry[] = [
+  [`SELECT status, count(*), sum(total)\nFROM orders\nGROUP BY status;`, 2880, 41, 4, null],
+  [`SELECT * FROM orders WHERE placed_at > now() - interval '7 days';`, 1440, 63, 18, null],
+  [`UPDATE orders SET status = 'shipped' WHERE id = 50231;`, 600, 12, 1, null],
+  [`SELECT totl FROM orders;`, 180, 4, null, 'ERROR:  column "totl" does not exist'],
+  [`SELECT c.name, count(o.id) AS orders\nFROM customers c\nJOIN orders o ON o.customer_id = c.id\nGROUP BY c.name\nORDER BY orders DESC\nLIMIT 10;`, 35, 57, 10, null],
+  [`SELECT * FROM customers WHERE tier = 'enterprise';`, 6, 19, 8, null],
+].map(([sql, ago, elapsedMs, rows, error], i) => ({
+  id: `h${i}`,
+  profileId: SHOP,
+  sql: sql as string,
+  ranAt: minutesAgo(ago as number),
+  elapsedMs: elapsedMs as number,
+  rows: rows as number | null,
+  error: error as string | null,
+}));
+
+let saved: SavedQuery[] = [
+  ["Top customers by revenue", `-- Top customers by revenue\nSELECT c.id, c.name, sum(o.total) AS revenue\nFROM customers c\nJOIN orders o ON o.customer_id = c.id\nWHERE o.status <> 'refunded'\nGROUP BY c.id\nORDER BY revenue DESC\nLIMIT 20;`],
+  ["Orders this week", `SELECT * FROM orders\nWHERE placed_at > now() - interval '7 days'\nORDER BY placed_at DESC;`],
+  ["Refunds by month", `SELECT date_trunc('month', placed_at) AS month, count(*), sum(total)\nFROM orders\nWHERE status = 'refunded'\nGROUP BY 1\nORDER BY 1;`],
+].map(([name, sql], i) => ({ id: `s${i}`, profileId: SHOP, name, sql, updatedAt: minutesAgo(5000 - i) }));
+
 let environments = [
   { id: "local", name: "Local", color: "#8E8E93", confirmWrites: false },
   { id: "staging", name: "Staging", color: "#F08C00", confirmWrites: false },
@@ -272,8 +349,10 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
     }
     case "open_session": {
       const p = profiles.find((x) => x.id === args.profileId)!;
+      const sessionId = crypto.randomUUID();
+      sessions.set(sessionId, p.id);
       return {
-        sessionId: crypto.randomUUID(),
+        sessionId,
         profileId: p.id,
         serverVersion: p.engine === "postgres" ? "PostgreSQL 17.2" : "MySQL 8.4.3",
         hops: p.network.mode === "direct" ? 0 : p.network.mode === "sshTunnel" ? 1 : p.network.hops.length,
@@ -292,41 +371,42 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
       return tables.map((t) => t.info) as T;
     case "run_query": {
       const sql = String(args.sql);
-      const bad = sql.indexOf("totl");
-      if (bad >= 0)
-        throw {
-          kind: "database",
-          message: 'ERROR:  column "totl" does not exist',
-          db: { engine: "postgres", code: null, sqlstate: "42703", severity: "ERROR", message: 'column "totl" does not exist', detail: null, hint: 'Perhaps you meant to reference the column "orders.total".', position: bad + 1 },
-        };
-      const fromTable = tableQuery(sql);
-      if (fromTable) return fromTable as T;
-      if (/^\s*(update|delete|insert)/i.test(sql)) {
-        return { sets: [{ columns: [], rows: [], rowCount: 3, truncated: false }], elapsedMs: 9 } satisfies QueryOutput as T;
+      const profileId = sessions.get(String(args.sessionId)) ?? "";
+      const remember = (rows: number | null, error: string | null, elapsedMs: number) => {
+        if (!args.record || !profiles.some((p) => p.id === profileId)) return;
+        history = history.filter((e) => !(e.profileId === profileId && e.sql === sql));
+        history.push({ id: crypto.randomUUID(), profileId, sql, ranAt: Date.now(), elapsedMs, rows, error });
+      };
+      try {
+        const out = runSql(sql);
+        remember(out.sets.at(-1)?.rowCount ?? null, null, out.elapsedMs);
+        return out as T;
+      } catch (e) {
+        remember(null, (e as { message: string }).message, 4);
+        throw e;
       }
-      // Anything else: customers with their revenue, best first.
-      const src = (column: string) => ({ schema: "public", table: "customers", column });
-      const rows = customers
-        .map((c) => [c[0], c[1], c[2], c[3], revenueByCustomer(c[0])])
-        .sort((a, b) => Number(b[4]) - Number(a[4]));
-      return {
-        sets: [
-          {
-            columns: [
-              { name: "id", typeName: "int8", source: src("id") },
-              { name: "name", typeName: "text", source: src("name") },
-              { name: "email", typeName: "text", source: src("email") },
-              { name: "tier", typeName: "text", source: src("tier") },
-              { name: "revenue", typeName: "numeric" },
-            ],
-            rows,
-            rowCount: rows.length,
-            truncated: false,
-          },
-        ],
-        elapsedMs: 38,
-      } satisfies QueryOutput as T;
     }
+    case "list_history":
+      return history.filter((e) => e.profileId === args.profileId).reverse() as T;
+    case "delete_history":
+      history = history.filter((e) => e.id !== args.id);
+      return undefined as T;
+    case "clear_history":
+      history = history.filter((e) => e.profileId !== args.profileId);
+      return undefined as T;
+    case "list_saved_queries":
+      return saved.filter((q) => q.profileId === args.profileId).sort((a, b) => a.name.localeCompare(b.name)) as T;
+    case "save_query": {
+      const q = { ...(args.query as SavedQuery) };
+      q.name = q.name.trim();
+      if (!q.name) throw { kind: "config", message: "Give the query a name" };
+      q.updatedAt = Date.now();
+      saved = [...saved.filter((x) => x.id !== q.id), q];
+      return q as T;
+    }
+    case "delete_saved_query":
+      saved = saved.filter((q) => q.id !== args.id);
+      return undefined as T;
     case "preview_edits":
       return (args.edits as RowEdit[])
         .map(

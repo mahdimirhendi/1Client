@@ -10,6 +10,7 @@ pub mod error;
 pub mod known_hosts;
 pub mod link;
 pub mod model;
+pub mod queries;
 pub mod secrets;
 pub mod session;
 pub mod steps;
@@ -17,9 +18,11 @@ pub mod store;
 pub mod tunnel;
 
 mod db;
+mod json_file;
 
 pub use environments::EnvironmentStore;
 pub use error::{DbError, DbStage, Error, Result};
 pub use model::*;
+pub use queries::{HistoryEntry, QueryStore, SavedQuery};
 pub use session::{Session, TestReport};
 pub use store::ConnectionStore;
