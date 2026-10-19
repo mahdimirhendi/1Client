@@ -33,6 +33,15 @@ pub enum HostKeyStatus {
     },
 }
 
+/// How OpenSSH names a host in known_hosts: `host` on port 22, `[host]:port` otherwise.
+pub fn entry_name(host: &str, port: u16) -> String {
+    if port == 22 {
+        host.to_string()
+    } else {
+        format!("[{host}]:{port}")
+    }
+}
+
 pub fn default_path() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".ssh").join("known_hosts"))
 }
@@ -51,8 +60,7 @@ pub fn check_path(host: &str, port: u16, key: &PublicKey, path: &Path) -> HostKe
 
 pub fn check_text(host: &str, port: u16, key: &PublicKey, text: &str) -> HostKeyStatus {
     // OpenSSH lowercases the host name before matching, which matters for hashed entries.
-    let host = host.to_ascii_lowercase();
-    let name = if port == 22 { host } else { format!("[{host}]:{port}") };
+    let name = entry_name(&host.to_ascii_lowercase(), port);
     let mut changed: Option<usize> = None;
     let mut trusted = false;
 
@@ -175,6 +183,19 @@ mod tests {
         assert_eq!(check_text("db.example.com", 22, &key(A), &file), HostKeyStatus::Trusted);
         assert_eq!(check_text("bad.example.com", 22, &key(A), &file), HostKeyStatus::Unknown);
         assert_eq!(check_text("db.example.com", 22, &key(B), &file), HostKeyStatus::Revoked { line: 2 });
+    }
+
+    #[test]
+    fn entry_names_and_the_changed_key_message() {
+        assert_eq!(entry_name("db.example.com", 22), "db.example.com");
+        assert_eq!(entry_name("10.0.0.5", 2222), "[10.0.0.5]:2222");
+        let e = crate::Error::HostKeyChanged {
+            host: "10.0.0.5".into(),
+            port: 2222,
+            line: 3,
+            fingerprint: "SHA256:x".into(),
+        };
+        assert!(e.to_string().contains("ssh-keygen -F '[10.0.0.5]:2222'"), "{e}");
     }
 
     #[test]

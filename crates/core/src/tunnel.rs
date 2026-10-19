@@ -222,7 +222,8 @@ async fn handshake(
                     Some("First connection to this server. Compare the fingerprint with your admin, then choose Trust and Retry.".into())
                 }
                 Error::HostKeyChanged { .. } => Some(format!(
-                    "If the server was rebuilt, remove the old line with `ssh-keygen -R {host}` and try again. Otherwise don't connect."
+                    "If the server was rebuilt, remove the old line with `ssh-keygen -R '{}'` and try again. Otherwise don't connect.",
+                    crate::known_hosts::entry_name(host, hop.port)
                 )),
                 _ => Some("The server is not speaking SSH on this port, or uses algorithms 1Client does not support.".into()),
             },

@@ -82,7 +82,10 @@ pub enum Error {
         key: String,
     },
 
-    #[error("{host}:{port} sent key {fingerprint}, which does not match ~/.ssh/known_hosts line {line}. Check with `ssh-keygen -F {host}` before trusting it.")]
+    #[error(
+        "{host}:{port} sent key {fingerprint}, which does not match ~/.ssh/known_hosts line {line}. Check with `ssh-keygen -F '{}'` before trusting it.",
+        crate::known_hosts::entry_name(.host, *.port)
+    )]
     HostKeyChanged { host: String, port: u16, line: usize, fingerprint: String },
 
     /// A database connect failure, with the part that failed.
