@@ -46,7 +46,8 @@ Window
 1. **Pick the engine** (PostgreSQL or MySQL), or paste a URL (`postgres://…`, `mysql://…`) to fill the fields.
 2. **Details**: host, port, user, password, database and SSL mode.
    - Passwords are saved encrypted by 1Client. A pasted `op://vault/item/field` reference is read from
-     1Password when connecting instead.
+     1Password when connecting instead. Every password field has an eye button to show or hide it; when
+     editing, it shows the saved password, which is only fetched at that moment.
    - **Connect via** Direct, SSH Tunnel (one server), or Bastion Host (an ordered list of hops, like
      OpenSSH `ProxyJump`, each with its own user, port and sign-in).
    - A route strip shows the path, for example `This Mac → bastion → app-01 → db.internal:5432`.

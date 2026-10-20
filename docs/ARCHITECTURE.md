@@ -88,6 +88,8 @@ by a command-line tool.
   vault, so this protects against accidental exposure (a copied file, a backup, a screen share), not
   against software running under your account. For stronger protection, store an `op://` 1Password
   reference instead of the password; only the reference is saved and the secret is read on connect.
+- Saved passwords are not sent to the UI. The edit sheet's eye button asks for one saved value of a
+  saved connection when it is clicked, and nothing else returns them.
 - Removing a connection, an SSH hop or a hop's password sign-in removes the matching secrets.
 - SSL mode `require` encrypts without verifying the certificate (libpq semantics); "Verify certificate"
   checks the chain and host name and should be used wherever possible.

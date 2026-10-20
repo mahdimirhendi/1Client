@@ -53,6 +53,21 @@ export const IconClose = ({ size = 8 }: P) => (
   </svg>
 );
 
+export const IconEye = ({ size = 14, color = "currentColor" }: P) => (
+  <svg width={size} height={size} viewBox="0 0 14 14" fill="none" stroke={color} strokeWidth="1.2" strokeLinejoin="round">
+    <path d="M1 7s2.2-4.2 6-4.2S13 7 13 7s-2.2 4.2-6 4.2S1 7 1 7z" />
+    <circle cx="7" cy="7" r="1.9" />
+  </svg>
+);
+
+export const IconEyeOff = ({ size = 14, color = "currentColor" }: P) => (
+  <svg width={size} height={size} viewBox="0 0 14 14" fill="none" stroke={color} strokeWidth="1.2" strokeLinejoin="round" strokeLinecap="round">
+    <path d="M1 7s2.2-4.2 6-4.2S13 7 13 7s-2.2 4.2-6 4.2S1 7 1 7z" />
+    <circle cx="7" cy="7" r="1.9" />
+    <path d="M2 12L12 2" />
+  </svg>
+);
+
 export const IconCheck = ({ size = 12, color = "currentColor" }: P) => (
   <svg width={size} height={size} viewBox="0 0 12 12" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M2.5 6.2l2.4 2.4 4.6-5" />

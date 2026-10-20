@@ -7,6 +7,7 @@ import type {
   QueryOutput,
   RowEdit,
   SavedQuery,
+  SecretField,
   SessionInfo,
   TableInfo,
   TestReport,
@@ -375,8 +376,19 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
         hops: p.network.mode === "direct" ? 0 : p.network.mode === "sshTunnel" ? 1 : p.network.hops.length,
       } satisfies SessionInfo as T;
     }
+    case "reveal_secret": {
+      const field = args.field as SecretField;
+      if (!profiles.some((p) => p.id === args.profileId)) return null as T;
+      const stored: Record<SecretField["kind"], string | null> = {
+        db: args.profileId === SHOP ? "op://Private/shop-api/password" : "local-dev-password",
+        hopPassphrase: "correct horse battery staple",
+        hopPassword: null,
+      };
+      return stored[field.kind] as T;
+    }
     case "secret_references":
-      return { dbPassword: "op://Private/shop-api/password", hops: {} } as T;
+      // Only shop-api keeps a 1Password reference; the others have plain saved passwords.
+      return (args.id === SHOP ? { dbPassword: "op://Private/shop-api/password", hops: {} } : { hops: {} }) as T;
     case "list_environments":
       return environments as T;
     case "save_environments":

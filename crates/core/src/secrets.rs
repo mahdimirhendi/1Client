@@ -44,6 +44,21 @@ fn hop_passphrase_account(p: Uuid, h: Uuid) -> String {
     format!("{p}/hop/{h}/passphrase")
 }
 
+/// One saved secret of a connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SecretField {
+    Db,
+    HopPassword {
+        #[serde(rename = "hopId")]
+        hop_id: Uuid,
+    },
+    HopPassphrase {
+        #[serde(rename = "hopId")]
+        hop_id: Uuid,
+    },
+}
+
 pub struct SecretStore {
     vault: AppVault,
 }
@@ -139,8 +154,18 @@ impl SecretStore {
         self.vault.remove_where(|account| account.starts_with(&hops) && !used.contains(account))
     }
 
+    /// One saved value as stored (a 1Password reference is not read), for the show-password
+    /// button of the edit sheet. Saved passwords are only sent to the UI through this, on request.
+    pub fn saved_value(&self, profile_id: Uuid, field: SecretField) -> Option<String> {
+        self.vault.get(&match field {
+            SecretField::Db => db_account(profile_id),
+            SecretField::HopPassword { hop_id } => hop_password_account(profile_id, hop_id),
+            SecretField::HopPassphrase { hop_id } => hop_passphrase_account(profile_id, hop_id),
+        })
+    }
+
     /// 1Password references saved for a profile, so the edit sheet can show them.
-    /// Real passwords are never returned.
+    /// Real passwords are never returned here.
     pub fn references(&self, profile: &ConnectionProfile) -> SecretsInput {
         let reference = |account: String| self.vault.get(&account).filter(|v| v.starts_with("op://"));
         let mut out = SecretsInput { db_password: reference(db_account(profile.id)), ..Default::default() };
@@ -399,6 +424,30 @@ mod tests {
 
         store.forget(&p).unwrap();
         assert_eq!(store.vault.get(&db_account(p.id)), None);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_saved_value_is_read_on_request() {
+        let dir = std::env::temp_dir().join(format!("oneclient-reveal-{}", Uuid::new_v4()));
+        let store = SecretStore::open(&dir).unwrap();
+        let (p, hop) = (Uuid::new_v4(), Uuid::new_v4());
+        store
+            .vault
+            .put_many(&[
+                (db_account(p), &Some("db-pw".into())),
+                (hop_passphrase_account(p, hop), &Some("op://Dev/key/pass".into())),
+            ])
+            .unwrap();
+        assert_eq!(store.saved_value(p, SecretField::Db).as_deref(), Some("db-pw"));
+        assert_eq!(
+            store.saved_value(p, SecretField::HopPassphrase { hop_id: hop }).as_deref(),
+            Some("op://Dev/key/pass")
+        );
+        assert_eq!(store.saved_value(p, SecretField::HopPassword { hop_id: hop }), None);
+        let field: SecretField =
+            serde_json::from_str(&format!(r#"{{"kind":"hopPassphrase","hopId":"{hop}"}}"#)).unwrap();
+        assert_eq!(field, SecretField::HopPassphrase { hop_id: hop });
         std::fs::remove_dir_all(dir).ok();
     }
 

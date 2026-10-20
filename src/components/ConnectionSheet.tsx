@@ -7,6 +7,7 @@ import type {
   ConnectionProfile,
   Engine,
   NetworkMode,
+  SecretField,
   SecretsInput,
   SshAuth,
   SshHop,
@@ -14,7 +15,7 @@ import type {
   TestReport,
 } from "../types";
 import { envColors, useDarkMode } from "../lib/theme";
-import { EngineBadge, IconCheck, IconPlus } from "./Icons";
+import { EngineBadge, IconCheck, IconEye, IconEyeOff, IconPlus } from "./Icons";
 
 const uid = () => crypto.randomUUID();
 
@@ -38,17 +39,68 @@ function blankProfile(engine: Engine): ConnectionProfile {
 const ONE_PASSWORD_AGENT = "~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock";
 
 /**
- * Props for a password field. Passwords are saved encrypted in 1Client. A pasted
- * 1Password reference (op://vault/item/field) is shown as text and read from 1Password on connect.
+ * A password field with a show / hide button. Passwords are saved encrypted in 1Client, and a saved one
+ * reaches the form only when the eye is clicked (`reveal`). A pasted 1Password reference
+ * (op://vault/item/field) isn't a secret: it is always shown, and read from 1Password on connect.
  */
-function secretInput(value: string | undefined, editing: boolean, label = "Password") {
-  const ref = !!value?.startsWith("op://");
-  return {
-    type: ref ? "text" : "password",
-    spellCheck: false,
-    placeholder: editing ? "Saved (type to change)" : label,
-    className: ref ? "mono" : "",
+function SecretInput({
+  value,
+  onChange,
+  reveal,
+  inputClass,
+  placeholder = "Password",
+  title,
+  width,
+}: {
+  value: string | undefined;
+  onChange: (value: string) => void;
+  /** Set when editing a saved connection: fetches the saved value, or null when there is none. */
+  reveal?: () => Promise<string | null>;
+  inputClass: string;
+  placeholder?: string;
+  title?: string;
+  width?: number;
+}) {
+  const [visible, setVisible] = useState(false);
+  const [nothingSaved, setNothingSaved] = useState(false);
+  const isRef = !!value?.startsWith("op://");
+
+  const toggle = async () => {
+    // Nothing typed yet: show what is saved, if anything.
+    if (!visible && value === undefined && reveal) {
+      const saved = await reveal().catch(() => null);
+      if (saved === null) setNothingSaved(true);
+      else onChange(saved);
+    }
+    setVisible(!visible);
   };
+
+  return (
+    <span className={`secret-field ${width ? "" : "grow"}`} style={width ? { width } : undefined}>
+      <input
+        type={visible || isRef ? "text" : "password"}
+        className={`${inputClass} ${isRef ? "mono" : ""}`}
+        spellCheck={false}
+        autoComplete="off"
+        title={title}
+        placeholder={nothingSaved ? "Nothing saved" : reveal ? "Saved (type to change)" : placeholder}
+        value={value ?? ""}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      {!isRef && (
+        <button
+          type="button"
+          className="secret-eye"
+          aria-label={visible ? "Hide password" : "Show password"}
+          aria-pressed={visible}
+          title={visible ? "Hide" : "Show"}
+          onClick={toggle}
+        >
+          {visible ? <IconEyeOff /> : <IconEye />}
+        </button>
+      )}
+    </span>
+  );
 }
 
 const newHop = (): SshHop => ({ id: uid(), host: "", port: 22, user: "", auth: { kind: "agent" } });
@@ -73,7 +125,8 @@ export function ConnectionSheet() {
   }, [editing]);
 
   if (!sheet) return null;
-  const sf = (value: string | undefined, label?: string) => secretInput(value, !!editing, label);
+  /** Fetches a saved secret for the show-password button (only for saved connections). */
+  const revealer = (field: SecretField) => (editing ? () => api.revealSecret(editing.id, field) : undefined);
 
   const update = (patch: Partial<ConnectionProfile>) => {
     setP((cur) => ({ ...cur, ...patch }));
@@ -239,12 +292,12 @@ export function ConnectionSheet() {
                     <input className="row-input" value={p.user} onChange={(e) => update({ user: e.target.value })} />
                   </Row>
                   <Row label="Password">
-                    <input
-                      {...sf(secrets.dbPassword)}
-                      className={`row-input ${sf(secrets.dbPassword).className}`}
+                    <SecretInput
+                      inputClass="row-input"
                       title="Password, or a 1Password reference (op://vault/item/field)"
-                      value={secrets.dbPassword ?? ""}
-                      onChange={(e) => setSecrets((s) => ({ ...s, dbPassword: e.target.value }))}
+                      value={secrets.dbPassword}
+                      onChange={(dbPassword) => setSecrets((s) => ({ ...s, dbPassword }))}
+                      reveal={revealer({ kind: "db" })}
                     />
                   </Row>
                   <Row label="Database">
@@ -423,12 +476,13 @@ export function ConnectionSheet() {
                             >
                               Choose…
                             </button>
-                            <input
-                              {...sf(secrets.hops?.[h.id]?.keyPassphrase, "Passphrase")}
-                              className={`fill-field ${sf(secrets.hops?.[h.id]?.keyPassphrase).className}`}
-                              style={{ width: secrets.hops?.[h.id]?.keyPassphrase?.startsWith("op://") ? 200 : 120 }}
-                              value={secrets.hops?.[h.id]?.keyPassphrase ?? ""}
-                              onChange={(e) => hopSecret(h.id, { keyPassphrase: e.target.value })}
+                            <SecretInput
+                              inputClass="fill-field"
+                              placeholder="Passphrase"
+                              width={secrets.hops?.[h.id]?.keyPassphrase?.startsWith("op://") ? 240 : 210}
+                              value={secrets.hops?.[h.id]?.keyPassphrase}
+                              onChange={(keyPassphrase) => hopSecret(h.id, { keyPassphrase })}
+                              reveal={revealer({ kind: "hopPassphrase", hopId: h.id })}
                             />
                           </>
                         )}
@@ -450,11 +504,11 @@ export function ConnectionSheet() {
                           </button>
                         )}
                         {h.auth.kind === "password" && (
-                          <input
-                            {...sf(secrets.hops?.[h.id]?.password)}
-                            className={`fill-field grow ${sf(secrets.hops?.[h.id]?.password).className}`}
-                            value={secrets.hops?.[h.id]?.password ?? ""}
-                            onChange={(e) => hopSecret(h.id, { password: e.target.value })}
+                          <SecretInput
+                            inputClass="fill-field"
+                            value={secrets.hops?.[h.id]?.password}
+                            onChange={(password) => hopSecret(h.id, { password })}
+                            reveal={revealer({ kind: "hopPassword", hopId: h.id })}
                           />
                         )}
                       </div>

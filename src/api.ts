@@ -8,6 +8,7 @@ import type {
   QueryOutput,
   RowEdit,
   SavedQuery,
+  SecretField,
   SecretsInput,
   SessionInfo,
   TableInfo,
@@ -43,6 +44,8 @@ export const api = {
   trustHostKey: (host: string, port: number, key: string) => call<void>("trust_host_key", { host, port, key }),
   openSession: (profileId: string) => call<SessionInfo>("open_session", { profileId }),
   secretReferences: (id: string) => call<SecretsInput>("secret_references", { id }),
+  /** One saved password, only when the user asks to see it. */
+  revealSecret: (profileId: string, field: SecretField) => call<string | null>("reveal_secret", { profileId, field }),
   closeSession: (sessionId: string) => call<void>("close_session", { sessionId }),
   takePendingLinks: () => call<{ profile: ConnectionProfile | null; error: string | null }[]>("take_pending_links"),
   saveTempConnection: (id: string) => call<ConnectionProfile>("save_temp_connection", { id }),

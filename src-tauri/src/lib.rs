@@ -9,7 +9,7 @@ mod menu;
 
 use oneclient_core::edit::RowEdit;
 use oneclient_core::link::{parse_link, IncomingConnection};
-use oneclient_core::secrets::{ProfileSecrets, SecretStore};
+use oneclient_core::secrets::{ProfileSecrets, SecretField, SecretStore};
 use oneclient_core::steps::{Step, StepStatus};
 use oneclient_core::{
     tunnel, ConnectionProfile, ConnectionStore, EnvironmentDef, EnvironmentStore, Error, HistoryEntry, QueryOutput,
@@ -159,6 +159,15 @@ async fn delete_connection(state: State<'_, AppState>, id: Uuid) -> CmdResult<()
 async fn secret_references(state: State<'_, AppState>, id: Uuid) -> CmdResult<SecretsInput> {
     let store = state.store.lock().await;
     Ok(store.get(id).map(|p| state.secrets.references(p)).unwrap_or_default())
+}
+
+/// One saved password of a saved connection, for the show-password button of the edit sheet.
+#[tauri::command]
+async fn reveal_secret(state: State<'_, AppState>, profile_id: Uuid, field: SecretField) -> CmdResult<Option<String>> {
+    if state.store.lock().await.get(profile_id).is_none() {
+        return Ok(None);
+    }
+    Ok(state.secrets.saved_value(profile_id, field))
 }
 
 /// Connect with unsaved form values, then disconnect.
@@ -398,6 +407,7 @@ pub fn run() {
             save_connection,
             delete_connection,
             secret_references,
+            reveal_secret,
             test_connection,
             trust_host_key,
             open_session,

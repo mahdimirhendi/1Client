@@ -43,6 +43,9 @@ export interface ConnectionProfile {
   lastUsedAt?: number | null;
 }
 
+/** One saved secret of a connection, for the show-password button. */
+export type SecretField = { kind: "db" } | { kind: "hopPassword"; hopId: string } | { kind: "hopPassphrase"; hopId: string };
+
 /** `undefined` keeps the saved value, `""` deletes it. */
 export interface SecretsInput {
   dbPassword?: string;

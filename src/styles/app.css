@@ -423,3 +423,10 @@ input, textarea, .cm-content, .grid-cell, pre { user-select: text; -webkit-user-
 .sidebar-note { padding: 14px 8px; font-size: var(--text-sm); color: var(--label-secondary); line-height: 1.45; }
 .doc-tab-dot { color: var(--label-secondary); font-size: 15px; line-height: 1; margin-left: -2px; }
 .table-pager { border-top: .5px solid var(--separator); }
+
+/* Password fields with a show / hide button */
+.secret-field { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.secret-field.grow { flex: 1 1 auto; }
+.secret-field > input { flex: 1; min-width: 0; width: 100%; }
+.secret-eye { flex-shrink: 0; width: 22px; height: 22px; padding: 0; border: none; border-radius: 5px; background: transparent; color: var(--label-secondary); display: grid; place-items: center; }
+.secret-eye:hover { background: var(--hover); color: var(--label); }

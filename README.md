@@ -59,6 +59,7 @@ connection is tagged with its environment so you always know where you are.
 - Environment tags (Local, Staging, Production, or your own) with colors on every connection tab.
 - *Ask before running writes* shows the exact SQL before anything changes; *Read-only session* refuses writes.
 - Passwords are stored encrypted, or as 1Password `op://` references that are read when you connect.
+  The eye button next to a password shows or hides it.
 
 **Feels like a Mac app**
 - Light, dark, or follow macOS. A short, real menu bar, and short right-click menus.
