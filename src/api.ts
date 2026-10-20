@@ -2,6 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { mockInvoke } from "./mock";
 import type {
   AppError,
+  Canvas,
   ConnectionProfile,
   EnvironmentDef,
   HistoryEntry,
@@ -57,6 +58,13 @@ export const api = {
   listSavedQueries: (profileId: string) => call<SavedQuery[]>("list_saved_queries", { profileId }),
   saveQuery: (query: SavedQuery) => call<SavedQuery>("save_query", { query }),
   deleteSavedQuery: (id: string) => call<void>("delete_saved_query", { id }),
+  /** `null` when the connection never had a canvas. */
+  listCanvases: (profileId: string) => call<Canvas[] | null>("list_canvases", { profileId }),
+  saveCanvas: (profileId: string, canvas: Canvas) => call<Canvas>("save_canvas", { profileId, canvas }),
+  deleteCanvas: (profileId: string, id: string) => call<void>("delete_canvas", { profileId, id }),
+  /** Asks where to save; `data` is SVG text or a base64 PNG. Returns the path, or null when cancelled. */
+  exportDiagram: (name: string, kind: "png" | "svg", data: string) =>
+    call<string | null>("export_diagram", { name, kind, data }),
   introspect: (sessionId: string) => call<TableInfo[]>("introspect", { sessionId }),
   applyEdits: (sessionId: string, edits: RowEdit[]) => call<number>("apply_edits", { sessionId, edits }),
   previewEdits: (sessionId: string, edits: RowEdit[]) => call<string>("preview_edits", { sessionId, edits }),

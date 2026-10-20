@@ -25,12 +25,17 @@ changes stay consistent. All colors, sizes and radii live in
 
 ```
 Window
-└── ConnectionTab[]        top bar, one per open connection
-    ├── sidebar            Tables (grouped by schema, the default one first) | Saved | History, with a filter
-    ├── tunnel status
-    └── DocumentTab[]      inner bar, per connection
-        ├── Query          SQL editor and its results
-        └── Table          a table opened from the sidebar (editor hidden, sortable on the server)
+└── ConnectionTab[]        top bar, one per open connection; Query | Diagram at the top right
+    ├── Query
+    │   ├── sidebar        Tables (grouped by schema, the default one first) | Saved | History, with a filter
+    │   ├── tunnel status
+    │   └── DocumentTab[]  inner bar, per connection
+    │       ├── Query      SQL editor and its results
+    │       └── Table      a table opened from the sidebar (editor hidden, sortable on the server)
+    └── Diagram
+        ├── canvases       the connection's canvases, with a badge when the database changed
+        ├── canvas         tables, lines and notes; toolbar with Add Note, Auto Layout, zoom, Export
+        └── panel          "In this canvas": its tables with checkboxes, and what it shows
 ```
 
 - A connection tab shows the engine badge, name, environment and number of open tabs. A 2 px line in
@@ -68,6 +73,19 @@ Window
 - Below the grid of a table tab, a pager shows the rows on screen ("Rows 201–400 of 4,532") with
   first / previous / next / last buttons, and Count Rows when the total isn't known yet.
 - Copy actions confirm with a short toast at the bottom of the window.
+
+## Diagram canvases
+
+- The canvas is a dotted surface (`--bg-canvas`). Tables are 230 px cards: a header with the name,
+  then one 26 px row per column with its PK / FK tag (amber / blue), name and type. The selected
+  card gets an accent ring, and its lines turn accent and thicker; other lines are gray.
+- Hovering a header or a column shows an eye button that hides it from this canvas. A card with
+  hidden columns ends with "N hidden columns · Show".
+- Notes are yellow (`--note-*`), dragged by their header and resized from the right edge.
+- New tables and columns carry a green NEW tag until the banner's "Got it". A dropped table is a
+  dashed red placeholder with "Remove from Canvas". The banner sits at the top of the canvas.
+- The minimap appears in the bottom right corner only when part of the canvas is out of view.
+- Drag a header to move a table, drag the background to scroll, pinch or ⌘-scroll to zoom.
 
 ## Environments and color tags
 

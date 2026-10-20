@@ -1,6 +1,9 @@
 import { useEffect } from "react";
+import { useCanvases } from "./canvases";
+import { CanvasSheet } from "./components/CanvasSheet";
 import { ConfirmWrite } from "./components/ConfirmWrite";
 import { ContextMenuHost } from "./components/ContextMenu";
+import { diagramCommand } from "./components/Diagram";
 import { EnvironmentsSheet } from "./components/EnvironmentsSheet";
 import { ConnectionSheet } from "./components/ConnectionSheet";
 import { SaveQuerySheet } from "./components/SaveQuerySheet";
@@ -15,6 +18,7 @@ import { useApp } from "./store";
 
 export default function App() {
   const { showWelcome, conns, sheet, setSheet, loadProfiles, activeConn, newQuery, closeDoc, envSheet, saveSheet } = useApp();
+  const canvasSheet = useCanvases((s) => s.sheet);
 
   useEffect(() => {
     loadProfiles();
@@ -38,7 +42,31 @@ export default function App() {
       const c = st.conns.find((x) => x.id === st.activeConn);
       const d = c?.docs.find((x) => x.id === c.activeDoc);
       if (id.startsWith("appearance:")) return useAppearance.getState().set(id.slice(11) as Appearance);
+      if (c && c.view === "diagram") {
+        // The diagram has no query tabs on screen: tab and editor commands wait for the query view.
+        switch (id) {
+          case "zoom-in":
+          case "zoom-out":
+          case "zoom-fit":
+            return diagramCommand(id);
+          case "find":
+            return diagramCommand("find");
+          case "refresh":
+            return st.refreshSchema(c.id);
+          case "toggle-diagram":
+            return st.setView(c.id, "query");
+          case "close-tab":
+          case "toggle-editor":
+          case "run-statement":
+          case "run-all":
+          case "format":
+          case "comment":
+            return;
+        }
+      }
       switch (id) {
+        case "toggle-diagram":
+          return c && st.setView(c.id, "diagram");
         case "new-connection":
           return st.setSheet({ mode: "new" });
         case "new-query":
@@ -89,6 +117,31 @@ export default function App() {
           : (e.metaKey && e.shiftKey && e.code === "BracketLeft") || (e.ctrlKey && e.shiftKey && e.key === "Tab")
             ? -1
             : 0;
+      const st = useApp.getState();
+      const conn = st.conns.find((x) => x.id === activeConn);
+      const diagram = conn?.view === "diagram";
+      if (conn && e.shiftKey && e.code === "KeyD") {
+        e.preventDefault();
+        st.setView(conn.id, diagram ? "query" : "diagram");
+        return;
+      }
+      if (diagram) {
+        const zoom = e.key === "=" || e.key === "+" ? "zoom-in" : e.key === "-" ? "zoom-out" : e.key === "0" ? "zoom-fit" : null;
+        if (zoom) {
+          e.preventDefault();
+          return diagramCommand(zoom);
+        }
+        if (k === "f") {
+          e.preventDefault();
+          return diagramCommand("find");
+        }
+        if (k === "r" && !e.shiftKey) {
+          e.preventDefault();
+          return st.refreshSchema(conn.id);
+        }
+        // No query tab is on screen to toggle or close.
+        if (k === "e" || k === "w") return e.preventDefault();
+      }
       if (activeConn && digit && !e.shiftKey && !e.altKey) {
         e.preventDefault();
         useApp.getState().activateDocAt(activeConn, Number(digit));
@@ -127,6 +180,7 @@ export default function App() {
       {sheet && <ConnectionSheet key={sheet.mode === "edit" ? sheet.profile.id : "new"} />}
       {envSheet && <EnvironmentsSheet />}
       {saveSheet && <SaveQuerySheet sheet={saveSheet} />}
+      {canvasSheet && <CanvasSheet key={canvasSheet.mode === "edit" ? canvasSheet.canvasId : "new"} sheet={canvasSheet} />}
       <ConfirmWrite />
       <ContextMenuHost />
       <ToastHost />

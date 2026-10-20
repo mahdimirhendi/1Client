@@ -177,3 +177,48 @@ export interface AppError {
   fingerprint?: string;
   key?: string;
 }
+
+// ---------- Diagram canvases. Mirrors crates/core/src/diagrams.rs. ----------
+
+export interface Point {
+  x: number;
+  y: number;
+}
+
+/** Which tables a canvas is about. Tables are named `schema.table`. */
+export type CanvasScope =
+  | { kind: "all" }
+  | { kind: "pattern"; patterns: string[] }
+  | { kind: "picked" }
+  | { kind: "neighbours"; root: string; depth: number };
+
+export interface CanvasNote {
+  id: string;
+  x: number;
+  y: number;
+  /** Width; the height follows the text. */
+  w: number;
+  text: string;
+}
+
+/** What the user chose and arranged. The tables and columns themselves always come from the database. */
+export interface Canvas {
+  id: string;
+  name: string;
+  scope: CanvasScope;
+  /** Put tables that are new in the database and in scope on the canvas by themselves. */
+  autoAdd: boolean;
+  zoom: number;
+  /** Canvas point shown at the top left of the view. */
+  pan: Point;
+  /** Where each table sits, by `schema.table`. A table is on the canvas when it has a position. */
+  positions: Record<string, Point>;
+  /** On the canvas but hidden; they keep their position. */
+  hiddenTables: string[];
+  hiddenColumns: Record<string, string[]>;
+  notes: CanvasNote[];
+  /** Column names of each table as the user last acknowledged them (for "what changed"). */
+  seen: Record<string, string[]>;
+  createdAt: number;
+  updatedAt: number;
+}

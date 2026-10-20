@@ -55,6 +55,16 @@ connection is tagged with its environment so you always know where you are.
   you save (⌘S); they run as `UPDATE … WHERE <primary key>` in one transaction.
 - Copy a value, a row, a row as JSON, a page or all rows, with a confirmation each time.
 
+**See your schema**
+- **Diagram canvases**: tables as cards with their columns and keys, and a line for every foreign key.
+  Drag tables where you want them, add notes, and hide the tables or columns you don't need.
+- Keep several canvases per connection: the whole database, tables matching a pattern (`billing_*`),
+  tables you pick, or a table and its neighbours. Each keeps its layout, notes and zoom.
+- Always up to date: tables and columns come from the database each time you look. New ones are
+  marked NEW, dropped tables stay as a placeholder until you remove them, and a short note says
+  what changed.
+- Export a canvas as PNG or SVG.
+
 **Stay safe**
 - Environment tags (Local, Staging, Production, or your own) with colors on every connection tab.
 - *Ask before running writes* shows the exact SQL before anything changes; *Read-only session* refuses writes.
@@ -70,6 +80,7 @@ connection is tagged with its environment so you always know where you are.
 | | Light | Dark |
 |---|---|---|
 | **Query and results** | <img src="docs/screenshots/workspace-light.png" alt="Query editor and results, light"> | <img src="docs/screenshots/workspace-dark.png" alt="Query editor and results, dark"> |
+| **Diagram canvases** | <img src="docs/screenshots/diagram-light.png" alt="A diagram canvas with tables, foreign key lines and a note, light"> | <img src="docs/screenshots/diagram-dark.png" alt="A diagram canvas with tables, foreign key lines and a note, dark"> |
 | **Filters and query history** | <img src="docs/screenshots/filters-light.png" alt="Table filters and the query history, light"> | <img src="docs/screenshots/filters-dark.png" alt="Table filters and the query history, dark"> |
 | **Connection through a bastion** | <img src="docs/screenshots/connection-light.png" alt="Connection sheet with two SSH hops, light"> | <img src="docs/screenshots/connection-dark.png" alt="Connection sheet with two SSH hops, dark"> |
 | **Saved connections** | <img src="docs/screenshots/welcome-light.png" alt="Welcome window, light"> | <img src="docs/screenshots/welcome-dark.png" alt="Welcome window, dark"> |
@@ -103,6 +114,7 @@ npm run app        # builds 1Client.app and copies it to /Applications
    database host as the last hop sees it (often `localhost` or a private IP).
 3. Pick an environment and the safety options, then click **Test Connection**.
 4. **Save and Connect**. Double-click a table in the sidebar to browse it, or write SQL and press ⌘↵.
+   Click **Diagram** at the top right to see the tables and how they link.
 
 ## Keyboard shortcuts
 
@@ -114,7 +126,10 @@ npm run app        # builds 1Client.app and copies it to /Applications
 | ⇧⌘] / ⇧⌘[ (or ⌃Tab / ⌃⇧Tab) | Next / previous tab |
 | ⌘↵ / ⇧⌘↵ | Run statement or selection / run everything |
 | ⌘E | Show or hide the SQL editor |
-| ⌘R | Run the tab's query again (refresh) |
+| ⌘R | Run the tab's query again (refresh); in the diagram, read the tables again |
+| ⇧⌘D | Switch between the query tabs and the diagram |
+| ⌘+ / ⌘− / ⌘0 | Diagram: zoom in / zoom out / zoom to fit |
+| ⌫ | Diagram: hide the selected table from the canvas |
 | ⌘F | Find and replace in the editor; in a table tab, jump to the filter |
 | ⇧⌘F / ⌘/ | Format SQL / toggle comment |
 | ↩ or double-click | Edit the selected cell |
@@ -155,6 +170,7 @@ Links and passwords are never written to logs.
 | `connections.json` | Saved connections, without passwords |
 | `environments.json` | Your environment tags |
 | `saved_queries.json`, `history.json` | Saved queries, and the queries you ran (the latest 500 per connection) |
+| `diagrams/` | Diagram canvases, one file per connection: layout, notes and hidden items, no table data |
 | `vault.json`, `vault.key` | Passwords and key passphrases, encrypted with ChaCha20-Poly1305; readable only by your user |
 
 The vault keeps passwords out of plain-text files and backups, but its key lives next to it, so
@@ -172,7 +188,7 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 npm install
 npm run tauri dev   # the app, with hot reload
 npm run dev         # only the UI, in a browser, against a made-up backend (src/mock.ts)
-npm run check       # TypeScript, predictor, sorting and SQL checks
+npm run check       # TypeScript, predictor, sorting, SQL and diagram checks
 cargo test --workspace
 ```
 
@@ -191,12 +207,12 @@ and [docs/DESIGN.md](docs/DESIGN.md) for the visual language.
 
 ## Roadmap
 
-- Restore open tabs and query text on launch; query history and saved queries
+- Restore open tabs and query text on launch
 - Cancel a running query, and a statement timeout setting
-- Paging and filters in table tabs; insert and delete rows; a structure view (columns, indexes, DDL)
+- Insert and delete rows; a structure view (columns, indexes, DDL)
 - Export results as CSV, TSV, JSON or `INSERT` statements
 - Import hosts from `~/.ssh/config`; automatic tunnel reconnect
-- Schema diagram, `EXPLAIN` view, query parameters
+- `EXPLAIN` view, query parameters
 - Signed and notarized builds with automatic updates
 - Redis and SQLite
 

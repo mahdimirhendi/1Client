@@ -23,7 +23,13 @@
   --bg-segment-track: #E4E4E9;
   --bg-field: #F2F2F5;
   --bg-row-alt: #FAFAFB;
-  --bg-canvas: #FAFAFB;          /* diagram canvas, dot grid #D5D5DA every 20px */
+  --bg-canvas: #FAFAFB;          /* diagram canvas, dot grid every 20px */
+  --canvas-dot: #D5D5DA;
+  --relation: #B4B4BA;           /* foreign key lines */
+  --minimap: #D1D1D6;
+  --note-bg: #FFF6CC;   --note-ring: rgba(160, 120, 0, 0.28);   --note-text: #3D3200;   --note-label: #8A6D00;
+  --info-ring: rgba(0, 104, 214, 0.28);
+  --error-line: #E5A3A0;
 
   /* Raised surfaces and controls */
   --bg-card: #FFFFFF;            /* grouped lists, cards */
@@ -134,6 +140,12 @@
     --bg-field: #38383C;
     --bg-row-alt: #232326;
     --bg-canvas: #1A1A1C;
+    --canvas-dot: rgba(255, 255, 255, 0.08);
+    --relation: #5A5A5E;
+    --minimap: #5A5A5E;
+    --note-bg: #3D3618;   --note-ring: rgba(255, 214, 10, 0.25);   --note-text: #F5E7A6;   --note-label: #C9B25A;
+    --info-ring: rgba(10, 132, 255, 0.40);
+    --error-line: #8E3B37;
 
     --bg-card: #2C2C2F;
     --bg-control: #3A3A3D;
@@ -198,6 +210,12 @@
   --bg-field: #38383C;
   --bg-row-alt: #232326;
   --bg-canvas: #1A1A1C;
+  --canvas-dot: rgba(255, 255, 255, 0.08);
+  --relation: #5A5A5E;
+  --minimap: #5A5A5E;
+  --note-bg: #3D3618;   --note-ring: rgba(255, 214, 10, 0.25);   --note-text: #F5E7A6;   --note-label: #C9B25A;
+  --info-ring: rgba(10, 132, 255, 0.40);
+  --error-line: #8E3B37;
 
   --bg-card: #2C2C2F;
   --bg-control: #3A3A3D;

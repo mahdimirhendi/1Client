@@ -26,7 +26,7 @@ npm run dev           # only the UI, in a browser, with a made-up backend
 ## Before opening a pull request
 
 ```sh
-npm run check                                              # types, predictor, sorting and SQL checks
+npm run check                                              # types, predictor, sorting, SQL and diagram checks
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace

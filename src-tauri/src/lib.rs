@@ -12,8 +12,8 @@ use oneclient_core::link::{parse_link, IncomingConnection};
 use oneclient_core::secrets::{ProfileSecrets, SecretField, SecretStore};
 use oneclient_core::steps::{Step, StepStatus};
 use oneclient_core::{
-    tunnel, ConnectionProfile, ConnectionStore, EnvironmentDef, EnvironmentStore, Error, HistoryEntry, QueryOutput,
-    QueryStore, SavedQuery, SecretsInput, Session, SessionInfo, TableInfo, TestReport,
+    tunnel, Canvas, ConnectionProfile, ConnectionStore, DiagramStore, EnvironmentDef, EnvironmentStore, Error,
+    HistoryEntry, QueryOutput, QueryStore, SavedQuery, SecretsInput, Session, SessionInfo, TableInfo, TestReport,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::{Mutex, RwLock};
@@ -25,6 +25,7 @@ struct AppState {
     store: Mutex<ConnectionStore>,
     environments: Mutex<EnvironmentStore>,
     queries: Mutex<QueryStore>,
+    diagrams: Mutex<DiagramStore>,
     secrets: SecretStore,
     sessions: RwLock<HashMap<Uuid, Arc<Session>>>,
     /// Connections opened from links: kept in memory only, until the user saves them.
@@ -150,6 +151,7 @@ async fn delete_connection(state: State<'_, AppState>, id: Uuid) -> CmdResult<()
     if let Some(p) = state.store.lock().await.remove(id)? {
         state.secrets.forget(&p)?;
         state.queries.lock().await.forget(id)?;
+        state.diagrams.lock().await.forget(id)?;
     }
     Ok(())
 }
@@ -296,6 +298,65 @@ async fn delete_saved_query(state: State<'_, AppState>, id: Uuid) -> CmdResult<(
     state.queries.lock().await.delete_saved(id)
 }
 
+// ---------- Diagram canvases ----------
+
+/// A connection's canvases; `None` when it never had any.
+#[tauri::command]
+async fn list_canvases(state: State<'_, AppState>, profile_id: Uuid) -> CmdResult<Option<Vec<Canvas>>> {
+    state.diagrams.lock().await.list(profile_id)
+}
+
+/// Add or update a canvas. Like the history, connections opened from a link and not saved keep none.
+#[tauri::command]
+async fn save_canvas(state: State<'_, AppState>, profile_id: Uuid, canvas: Canvas) -> CmdResult<Canvas> {
+    if state.store.lock().await.get(profile_id).is_none() {
+        return Err(Error::Config("Save this connection to keep canvases for it".into()));
+    }
+    state.diagrams.lock().await.save(profile_id, canvas)
+}
+
+#[tauri::command]
+async fn delete_canvas(state: State<'_, AppState>, profile_id: Uuid, id: Uuid) -> CmdResult<()> {
+    state.diagrams.lock().await.delete(profile_id, id)
+}
+
+#[derive(Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ExportKind {
+    Png,
+    Svg,
+}
+
+/// Save an exported diagram where the user chooses in the save panel. The panel is opened here,
+/// so the page never picks the path it writes to. `data` is the SVG text, or the PNG in base64.
+/// Returns the path, or `None` when the user cancelled.
+#[tauri::command]
+async fn export_diagram(app: AppHandle, name: String, kind: ExportKind, data: String) -> CmdResult<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    let (bytes, ext, label) = match kind {
+        ExportKind::Svg => (data.into_bytes(), "svg", "SVG image"),
+        ExportKind::Png => (
+            data_encoding::BASE64.decode(data.as_bytes()).map_err(|e| Error::Config(format!("Not a PNG: {e}")))?,
+            "png",
+            "PNG image",
+        ),
+    };
+    let safe: String = name.chars().map(|c| if c == '/' || c == ':' || c.is_control() { '-' } else { c }).collect();
+    let mut dialog = app.dialog().file().set_title("Export Diagram").set_file_name(format!("{}.{ext}", safe.trim()));
+    dialog = dialog.add_filter(label, &[ext]);
+    if let Some(w) = app.get_webview_window("main") {
+        dialog = dialog.set_parent(&w);
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    dialog.save_file(move |picked| {
+        let _ = tx.send(picked);
+    });
+    let Some(picked) = rx.await.ok().flatten() else { return Ok(None) };
+    let path = picked.into_path().map_err(|e| Error::Config(e.to_string()))?;
+    tokio::fs::write(&path, bytes).await?;
+    Ok(Some(path.display().to_string()))
+}
+
 /// Light, dark or follow macOS: sets the window (title bar, native controls) and the menu checkmark.
 #[tauri::command]
 fn set_appearance(app: tauri::AppHandle, mode: String) {
@@ -361,10 +422,12 @@ pub fn run() {
             let secrets = SecretStore::open(&dir)?;
             let environments = EnvironmentStore::open(&dir)?;
             let queries = QueryStore::open(&dir)?;
+            let diagrams = DiagramStore::open(&dir)?;
             app.manage(AppState {
                 store: Mutex::new(store),
                 environments: Mutex::new(environments),
                 queries: Mutex::new(queries),
+                diagrams: Mutex::new(diagrams),
                 secrets,
                 sessions: RwLock::new(HashMap::new()),
                 temp: Default::default(),
@@ -419,6 +482,10 @@ pub fn run() {
             list_saved_queries,
             save_query,
             delete_saved_query,
+            list_canvases,
+            save_canvas,
+            delete_canvas,
+            export_diagram,
             introspect,
             apply_edits,
             set_appearance,

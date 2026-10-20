@@ -1,9 +1,10 @@
 //! 1Client core: connection profiles, saved passwords, SSH tunnels (including
-//! multi-hop bastion chains) and the PostgreSQL / MySQL drivers.
+//! multi-hop bastion chains), the PostgreSQL / MySQL drivers and the app's saved data.
 //!
 //! This crate has no UI or Tauri dependency, so it can be unit tested and reused
 //! (for example by a CLI) on its own.
 
+pub mod diagrams;
 pub mod edit;
 pub mod environments;
 pub mod error;
@@ -20,6 +21,7 @@ pub mod tunnel;
 mod db;
 mod json_file;
 
+pub use diagrams::{Canvas, DiagramStore};
 pub use environments::EnvironmentStore;
 pub use error::{DbError, DbStage, Error, Result};
 pub use model::*;

@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { useApp, type ConnTab, type DocTab } from "../store";
 import { ConnectionTabs } from "./ConnectionTabs";
+import { Diagram } from "./Diagram";
 import { DocTabs } from "./DocTabs";
 import { FilterBar } from "./FilterBar";
 import { IconDatabase, IconPlay } from "./Icons";
@@ -56,28 +57,32 @@ export function Workspace() {
     <div className="window">
       <Toolbar conn={conn} doc={doc} />
       <ConnectionTabs />
-      <div className="body">
-        <Sidebar conn={conn} />
-        <main className="main" ref={main}>
-          <DocTabs conn={conn} />
-          {!doc ? (
-            <NoTabs connId={conn.id} />
-          ) : (
-            <>
-              {doc.showEditor && (
-                <>
-                  <div className="editor-pane" style={{ flex: `0 0 ${split * 100}%` }}>
-                    <QueryEditor key={`${conn.id}:${doc.id}`} conn={conn} doc={doc} />
-                  </div>
-                  <div className="splitter" role="separator" aria-orientation="horizontal" onPointerDown={startDrag} />
-                </>
-              )}
-              {doc.table && <FilterBar key={`filters:${conn.id}:${doc.id}`} conn={conn} doc={doc} />}
-              <Results key={`${conn.id}:${doc.id}`} conn={conn} doc={doc} />
-            </>
-          )}
-        </main>
-      </div>
+      {conn.view === "diagram" ? (
+        <Diagram conn={conn} />
+      ) : (
+        <div className="body">
+          <Sidebar conn={conn} />
+          <main className="main" ref={main}>
+            <DocTabs conn={conn} />
+            {!doc ? (
+              <NoTabs connId={conn.id} />
+            ) : (
+              <>
+                {doc.showEditor && (
+                  <>
+                    <div className="editor-pane" style={{ flex: `0 0 ${split * 100}%` }}>
+                      <QueryEditor key={`${conn.id}:${doc.id}`} conn={conn} doc={doc} />
+                    </div>
+                    <div className="splitter" role="separator" aria-orientation="horizontal" onPointerDown={startDrag} />
+                  </>
+                )}
+                {doc.table && <FilterBar key={`filters:${conn.id}:${doc.id}`} conn={conn} doc={doc} />}
+                <Results key={`${conn.id}:${doc.id}`} conn={conn} doc={doc} />
+              </>
+            )}
+          </main>
+        </div>
+      )}
     </div>
   );
 }
@@ -97,7 +102,8 @@ function NoTabs({ connId }: { connId: string }) {
 }
 
 function Toolbar({ conn, doc }: { conn: ConnTab; doc?: DocTab }) {
-  const { toggleEditor, run, temporary, saveTemporary } = useApp();
+  const { toggleEditor, run, temporary, saveTemporary, setView, refreshSchema } = useApp();
+  const diagram = conn.view === "diagram";
   const hasSelection = useEditorStatus((s) => s.selected > 0);
   const isTemporary = !!temporary[conn.profile.id];
   const hops = conn.info.hops;
@@ -130,7 +136,26 @@ function Toolbar({ conn, doc }: { conn: ConnTab; doc?: DocTab }) {
         </button>
       )}
       <div className="grow" data-tauri-drag-region />
-      {doc && (
+      <div className="segmented" role="tablist" aria-label="Show">
+        <button role="tab" aria-selected={!diagram} className={diagram ? "" : "on"} onClick={() => setView(conn.id, "query")}>
+          Query
+        </button>
+        <button
+          role="tab"
+          aria-selected={diagram}
+          className={diagram ? "on" : ""}
+          title="Diagram of the tables (⇧⌘D)"
+          onClick={() => setView(conn.id, "diagram")}
+        >
+          Diagram
+        </button>
+      </div>
+      {diagram && (
+        <button className="btn" title="Read the tables again (⌘R)" onClick={() => refreshSchema(conn.id)}>
+          ↻ Refresh <span className="kbd muted">⌘R</span>
+        </button>
+      )}
+      {doc && !diagram && (
         <>
           <button
             className={`btn toggle ${doc.showEditor ? "on" : ""}`}

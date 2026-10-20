@@ -74,6 +74,28 @@ export const IconCheck = ({ size = 12, color = "currentColor" }: P) => (
   </svg>
 );
 
+/** Two linked boxes: a diagram canvas. */
+export const IconCanvas = ({ size = 14, color = "currentColor" }: P) => (
+  <svg width={size} height={size} viewBox="0 0 14 14" fill="none" stroke={color} strokeWidth="1.3">
+    <rect x="1" y="1.5" width="5" height="4" rx="1" />
+    <rect x="8" y="8.5" width="5" height="4" rx="1" />
+    <path d="M6 3.5h2.5a1 1 0 0 1 1 1v4" />
+  </svg>
+);
+
+export const IconNote = ({ size = 13, color = "currentColor" }: P) => (
+  <svg width={size} height={size} viewBox="0 0 14 14" fill="none" stroke={color} strokeWidth="1.3" strokeLinejoin="round">
+    <path d="M2 2h10v7l-3 3H2z" />
+    <path d="M9 12V9h3" />
+  </svg>
+);
+
+export const IconRefresh = ({ size = 14, color = "currentColor" }: P) => (
+  <svg width={size} height={size} viewBox="0 0 14 14" fill="none" stroke={color} strokeWidth="1.4" strokeLinecap="round">
+    <path d="M12 7a5 5 0 1 1-1.5-3.5M12 2v2.5H9.5" />
+  </svg>
+);
+
 export const AppIcon = ({ size = 96 }: P) => (
   <div className="app-icon" style={{ width: size, height: size, borderRadius: size * 0.23 }}>
     <svg width={size * 0.58} height={size * 0.58} viewBox="0 0 56 56" fill="none" stroke="#9CCBFF" strokeWidth="3" strokeLinecap="round">

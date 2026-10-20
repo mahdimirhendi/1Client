@@ -1,6 +1,7 @@
 // A small in-memory backend so the UI runs in a normal browser (`npm run dev`) for design work
 // and screenshots. Never used inside the Tauri app. All data is made up.
 import type {
+  Canvas,
   ColumnMeta,
   ConnectionProfile,
   HistoryEntry,
@@ -77,27 +78,15 @@ interface MockTable {
   rows: Cell[][];
 }
 
-/** `name:type[:pk|:fk|:nn]` per column; `fk` columns reference `<table>.id`. */
+/** `name:type[:pk|:fk|:nn]` per column; `fk` columns reference `<table>.id`, `fk>schema.table.column` another column. */
+function column(schema: string, spec: string): TableInfo["columns"][number] {
+  const [n, t, k] = spec.split(":");
+  const ref = k?.startsWith("fk>") ? k.slice(3) : k === "fk" ? `${schema}.${n.replace(/_id$/, "s")}.id` : null;
+  return { name: n, dataType: t, nullable: !k, primaryKey: k === "pk", foreignKey: !!ref, references: ref };
+}
+
 function table(schema: string, name: string, cols: string[], rows: Cell[][], kind: "table" | "view" = "table"): MockTable {
-  return {
-    info: {
-      schema,
-      name,
-      kind,
-      columns: cols.map((c) => {
-        const [n, t, k] = c.split(":");
-        return {
-          name: n,
-          dataType: t,
-          nullable: !k,
-          primaryKey: k === "pk",
-          foreignKey: k === "fk",
-          references: k === "fk" ? `${schema}.${n.replace(/_id$/, "s")}.id` : null,
-        };
-      }),
-    },
-    rows,
-  };
+  return { info: { schema, name, kind, columns: cols.map((c) => column(schema, c)) }, rows };
 }
 
 const COMPANIES = [
@@ -144,7 +133,77 @@ const tables: MockTable[] = [
   table("public", "customers", ["id:int8:pk", "name:text:nn", "email:text", "tier:text:nn", "created_at:timestamptz:nn"], customers),
   table("public", "orders", ["id:int8:pk", "customer_id:int8:fk", "status:text:nn", "total:numeric:nn", "placed_at:timestamptz:nn"], orders),
   table("public", "products", ["id:int8:pk", "sku:text:nn", "name:text:nn", "price:numeric:nn"], products),
+  table("public", "order_items", ["id:int8:pk", "order_id:int8:fk", "product_id:int8:fk", "quantity:int4:nn", "unit_price:numeric:nn"], []),
+  table("public", "payments", ["id:int8:pk", "order_id:int8:fk", "method:text:nn", "amount:numeric:nn", "paid_at:timestamptz"], []),
+  table("public", "refunds", ["id:int8:pk", "payment_id:int8:fk", "reason:text", "amount:numeric:nn", "created_at:timestamptz:nn"], []),
+  table("public", "addresses", ["id:int8:pk", "customer_id:int8:fk", "line1:text:nn", "city:text:nn", "country:char(2):nn"], []),
+  table("public", "shipments", ["id:int8:pk", "order_id:int8:fk", "address_id:int8:fk>public.addresses.id", "carrier:text", "shipped_at:timestamptz"], []),
 ];
+
+// `?tables=300` adds that many made-up tables in an "app" schema (in groups linked by foreign keys),
+// to try big diagrams.
+const extra = Number(new URLSearchParams(globalThis.location?.search ?? "").get("tables")) || 0;
+for (let i = 0; i < extra; i++) {
+  const cols = ["id:int8:pk", "name:text:nn", "status:text", "created_at:timestamptz:nn", "updated_at:timestamptz"];
+  if (i % 5) cols.splice(1, 0, `parent_id:int8:fk>app.t${String(i - (i % 5)).padStart(3, "0")}.id`);
+  if (i % 7 === 3) cols.push("customer_id:int8:fk>public.customers.id");
+  tables.push(table("app", `t${String(i).padStart(3, "0")}`, cols, []));
+}
+
+/** Schema changes typed in a query tab, so the live diagram can be tried: CREATE / DROP TABLE and ALTER TABLE ADD / DROP COLUMN. */
+function runDdl(sql: string): QueryOutput | null {
+  // [schema.]table, each part maybe quoted ("x" or `x`).
+  const name = /^(?:["`]?(\w+)["`]?\.)?["`]?(\w+)["`]?/;
+  const target = (text: string) => {
+    const m = name.exec(text.trim());
+    return m ? { schema: m[1] ?? "public", name: m[2], rest: text.trim().slice(m[0].length).trim() } : null;
+  };
+  const done = { sets: [{ columns: [], rows: [], rowCount: 0, truncated: false }], elapsedMs: 11 } satisfies QueryOutput;
+  const text = sql.trim().replace(/;\s*$/, "");
+  let m = /^drop\s+table\s+(?:if\s+exists\s+)?(.+)$/is.exec(text);
+  if (m) {
+    const t = target(m[1]);
+    const i = t ? tables.findIndex((x) => x.info.schema === t.schema && x.info.name === t.name) : -1;
+    if (i < 0) throw { kind: "database", message: `ERROR:  table "${t?.name}" does not exist` };
+    tables.splice(i, 1);
+    return done;
+  }
+  m = /^create\s+table\s+(?:if\s+not\s+exists\s+)?(.+)$/is.exec(text);
+  if (m) {
+    const t = target(m[1]);
+    const body = t && /^\((.*)\)$/s.exec(t.rest)?.[1];
+    if (!t || !body) throw { kind: "database", message: "ERROR:  syntax error in CREATE TABLE" };
+    const cols = body.split(",").map((c) => {
+      const [n, type = "text", ...more] = c.trim().split(/\s+/);
+      const extra = more.join(" ").toLowerCase();
+      const ref = /references\s+(?:(\w+)\.)?(\w+)\s*\((\w+)\)/.exec(extra);
+      const key = extra.includes("primary key") ? "pk" : ref ? `fk>${ref[1] ?? t.schema}.${ref[2]}.${ref[3]}` : "";
+      return column(t.schema, [n.replace(/["`]/g, ""), type, key].filter(Boolean).join(":"));
+    });
+    tables.push({ info: { schema: t.schema, name: t.name, kind: "table", columns: cols }, rows: [] });
+    tables.sort((a, b) => a.info.schema.localeCompare(b.info.schema) || a.info.name.localeCompare(b.info.name));
+    return done;
+  }
+  m = /^alter\s+table\s+(.+)$/is.exec(text);
+  if (m) {
+    const t = target(m[1]);
+    const mt = t && findTable(t.schema, t.name);
+    if (!t || !mt) throw { kind: "database", message: `ERROR:  relation "${t?.name}" does not exist` };
+    const add = /^add\s+(?:column\s+)?["`]?(\w+)["`]?\s+(\S+)/i.exec(t.rest);
+    const drop = /^drop\s+(?:column\s+)?["`]?(\w+)["`]?/i.exec(t.rest);
+    if (add) {
+      mt.info.columns.push(column(t.schema, `${add[1]}:${add[2]}`));
+      mt.rows.forEach((r) => r.push(null));
+    } else if (drop) {
+      const i = mt.info.columns.findIndex((c) => c.name === drop[1]);
+      if (i < 0) throw { kind: "database", message: `ERROR:  column "${drop[1]}" does not exist` };
+      mt.info.columns.splice(i, 1);
+      mt.rows.forEach((r) => r.splice(i, 1));
+    } else throw { kind: "database", message: "ERROR:  only ADD COLUMN and DROP COLUMN are known to the demo backend" };
+    return done;
+  }
+  return null;
+}
 
 /** Postgres type names as the server reports them for a result column. */
 const PG_TYPE: Record<string, string> = { int8: "int8", text: "text", numeric: "numeric", timestamptz: "timestamptz", date: "date" };
@@ -253,6 +312,8 @@ function runSql(sql: string): QueryOutput {
       message: 'ERROR:  column "totl" does not exist',
       db: { engine: "postgres", code: null, sqlstate: "42703", severity: "ERROR", message: 'column "totl" does not exist', detail: null, hint: 'Perhaps you meant to reference the column "orders.total".', position: bad + 1 },
     };
+  const ddl = runDdl(sql);
+  if (ddl) return ddl;
   const fromTable = tableQuery(sql);
   if (fromTable) return fromTable;
   if (/^\s*(update|delete|insert)/i.test(sql)) {
@@ -318,6 +379,9 @@ let environments = [
   { id: "demo", name: "Customer demo", color: "#8E4EC6", confirmWrites: true },
 ];
 
+/** Diagram canvases by connection; none until a connection's diagram is first opened. */
+const canvases = new Map<string, Canvas[]>();
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
@@ -335,6 +399,7 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
     case "delete_connection": {
       const i = profiles.findIndex((x) => x.id === args.id);
       if (i >= 0) profiles.splice(i, 1);
+      canvases.delete(String(args.id));
       return undefined as T;
     }
     case "test_connection": {
@@ -397,7 +462,36 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
     case "take_pending_links":
       return [] as T;
     case "introspect":
-      return tables.map((t) => t.info) as T;
+      return structuredClone(tables.map((t) => t.info)) as T;
+    case "list_canvases":
+      return (canvases.has(String(args.profileId)) ? structuredClone(canvases.get(String(args.profileId))) : null) as T;
+    case "save_canvas": {
+      const profileId = String(args.profileId);
+      if (!profiles.some((p) => p.id === profileId)) throw { kind: "config", message: "Save this connection to keep canvases for it" };
+      const c = structuredClone(args.canvas as Canvas);
+      c.name = c.name.trim();
+      if (!c.name) throw { kind: "config", message: "Give the canvas a name" };
+      if (c.scope.kind === "picked") c.autoAdd = false;
+      const list = canvases.get(profileId) ?? [];
+      const i = list.findIndex((x) => x.id === c.id);
+      c.updatedAt = Date.now();
+      c.createdAt = i >= 0 ? list[i].createdAt : c.updatedAt;
+      if (i >= 0) list[i] = c;
+      else list.push(c);
+      canvases.set(profileId, list);
+      return structuredClone(c) as T;
+    }
+    case "delete_canvas": {
+      const profileId = String(args.profileId);
+      canvases.set(profileId, (canvases.get(profileId) ?? []).filter((c) => c.id !== args.id));
+      return undefined as T;
+    }
+    case "export_diagram": {
+      // The app asks where to save; the demo keeps the file for checks and says where it would be.
+      const { name, kind, data } = args as { name: string; kind: string; data: string };
+      (window as unknown as { __lastExport?: unknown }).__lastExport = { name, kind, data };
+      return `/Users/you/Desktop/${name}.${kind}` as T;
+    }
     case "run_query": {
       const sql = String(args.sql);
       const profileId = sessions.get(String(args.sessionId)) ?? "";

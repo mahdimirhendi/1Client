@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { api } from "./api";
+import { useCanvases } from "./canvases";
 import {
   countSql,
   defaultSchema,
@@ -63,6 +64,8 @@ export interface ConnTab {
   history?: HistoryEntry[];
   /** Saved queries of this connection, by name. */
   saved?: SavedQuery[];
+  /** What the window shows: query and table tabs, or the diagram canvases. */
+  view: "query" | "diagram";
 }
 
 export type Sheet = { mode: "new" } | { mode: "edit"; profile: ConnectionProfile } | null;
@@ -117,6 +120,8 @@ interface State {
   closeConnection(connId: string): Promise<void>;
   activateConn(connId: string): void;
   refreshSchema(connId: string): Promise<void>;
+  /** Show the query tabs or the diagram. The diagram reads the schema again, so it is up to date. */
+  setView(connId: string, view: ConnTab["view"]): void;
 
   newQuery(connId: string, sql?: string): void;
   openTable(connId: string, table: TableInfo): void;
@@ -211,6 +216,7 @@ export const useApp = create<State>((set, get) => ({
 
   async deleteProfile(id) {
     await api.deleteConnection(id);
+    useCanvases.getState().forget(id);
     await get().loadProfiles();
   },
 
@@ -229,7 +235,7 @@ export const useApp = create<State>((set, get) => ({
     try {
       const info = await api.openSession(profileId);
       const first = queryDoc([]);
-      const tab: ConnTab = { id: info.sessionId, profile, info, docs: [first], activeDoc: first.id };
+      const tab: ConnTab = { id: info.sessionId, profile, info, docs: [first], activeDoc: first.id, view: "query" };
       set((s) => ({ conns: [...s.conns, tab], activeConn: tab.id, showWelcome: false, connecting: null }));
       get().refreshSchema(tab.id);
       get().loadHistory(tab.id);
@@ -277,6 +283,8 @@ export const useApp = create<State>((set, get) => ({
   },
 
   async closeConnection(connId) {
+    const closing = get().conns.find((c) => c.id === connId);
+    if (closing) useCanvases.getState().flush(closing.profile.id);
     await api.closeSession(connId).catch(() => {});
     set((s) => {
       const conns = s.conns.filter((c) => c.id !== connId);
@@ -293,8 +301,20 @@ export const useApp = create<State>((set, get) => ({
     try {
       const schema = await api.introspect(connId);
       set((s) => ({ conns: s.conns.map((c) => (c.id === connId ? { ...c, schema, schemaError: undefined } : c)) }));
+      const conn = get().conns.find((c) => c.id === connId);
+      if (conn) useCanvases.getState().sync(conn);
     } catch (e) {
       set((s) => ({ conns: s.conns.map((c) => (c.id === connId ? { ...c, schemaError: e as AppError } : c)) }));
+    }
+  },
+
+  setView(connId, view) {
+    const conn = get().conns.find((c) => c.id === connId);
+    if (!conn || conn.view === view) return;
+    set((s) => ({ conns: s.conns.map((c) => (c.id === connId ? { ...c, view } : c)) }));
+    if (view === "diagram") {
+      useCanvases.getState().load(conn);
+      get().refreshSchema(connId);
     }
   },
 
@@ -303,7 +323,7 @@ export const useApp = create<State>((set, get) => ({
       conns: s.conns.map((c) => {
         if (c.id !== connId) return c;
         const doc = queryDoc(c.docs, sql);
-        return { ...c, docs: [...c.docs, doc], activeDoc: doc.id };
+        return { ...c, docs: [...c.docs, doc], activeDoc: doc.id, view: "query" };
       }),
     }));
   },
@@ -320,7 +340,7 @@ export const useApp = create<State>((set, get) => ({
     const title = table.schema === defaultSchema(conn.profile) ? table.name : `${table.schema}.${table.name}`;
     const doc: DocTab = { id: uid(), kind: "table", title, sql, running: false, showEditor: false, table: ref };
     set((s) => ({
-      conns: s.conns.map((c) => (c.id === connId ? { ...c, docs: [...c.docs, doc], activeDoc: doc.id } : c)),
+      conns: s.conns.map((c) => (c.id === connId ? { ...c, docs: [...c.docs, doc], activeDoc: doc.id, view: "query" } : c)),
     }));
     get().run(connId, doc.id, sql, true);
   },
@@ -339,7 +359,7 @@ export const useApp = create<State>((set, get) => ({
   },
 
   activateDoc(connId, docId) {
-    set((s) => ({ conns: s.conns.map((c) => (c.id === connId ? { ...c, activeDoc: docId } : c)) }));
+    set((s) => ({ conns: s.conns.map((c) => (c.id === connId ? { ...c, activeDoc: docId, view: "query" } : c)) }));
   },
 
   activateDocAt(connId, n) {
@@ -430,7 +450,9 @@ export const useApp = create<State>((set, get) => ({
     const open = opts.savedId ? conn.docs.find((d) => d.savedId === opts.savedId) : undefined;
     const doc = open ?? { ...queryDoc(conn.docs, sql), ...(opts.title ? { title: opts.title } : {}), savedId: opts.savedId };
     set((s) => ({
-      conns: s.conns.map((c) => (c.id !== connId ? c : { ...c, docs: open ? c.docs : [...c.docs, doc], activeDoc: doc.id })),
+      conns: s.conns.map((c) =>
+        c.id !== connId ? c : { ...c, docs: open ? c.docs : [...c.docs, doc], activeDoc: doc.id, view: "query" },
+      ),
     }));
     if (opts.run) get().run(connId, doc.id, doc.sql);
   },
