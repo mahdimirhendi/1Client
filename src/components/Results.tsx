@@ -72,7 +72,13 @@ export function Results({ conn, doc }: { conn: ConnTab; doc: DocTab }) {
         {sets.length > 1 ? (
           <div className="segmented">
             {sets.map((_, i) => (
-              <button key={i} className={i === idx ? "on" : ""} onClick={() => setSetIdx(i)}>
+              <button
+                key={i}
+                className={i === idx ? "on" : ""}
+                onClick={() =>
+                  i !== idx && doc.dirty ? showToast("Save or discard your changes before showing another result.", "error") : setSetIdx(i)
+                }
+              >
                 Result {i + 1}
               </button>
             ))}
@@ -189,11 +195,12 @@ function Grid({ conn, doc, set, setIdx }: { conn: ConnTab; doc: DocTab; set: Res
   const scroller = useRef<HTMLDivElement>(null);
   const saveEdits = useApp((s) => s.saveEdits);
   const setTableView = useApp((s) => s.setTableView);
-  const setDirty = useApp((s) => s.setDirty);
+  const setEdits = useApp((s) => s.setEdits);
   // Rows are addressed by their index in `set.rows` everywhere (selection, edits); sorting
   // only changes the order they are shown in.
   const [sel, setSel] = useState<[number, number] | null>(null);
-  const [changes, setChanges] = useState<Changes>(() => new Map());
+  // Unsaved edits made on this result before the grid was last shown come back.
+  const [changes, setChanges] = useState<Changes>(() => (doc.edits?.set === set ? doc.edits.changes : new Map()));
   const [editing, setEditing] = useState<Editing | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   /** Shown in the edit bar: why saving (or sorting) didn't work. */
@@ -246,14 +253,18 @@ function Grid({ conn, doc, set, setIdx }: { conn: ConnTab; doc: DocTab; set: Res
     setTableView(conn.id, doc.id, { ...doc.view, where: undefined, filters: [...(doc.view?.filters ?? []), filter], page: undefined });
   };
 
-  // The filter bar and other tabs need to know about unsaved edits, so they don't run over them.
+  // Unsaved edits are kept with the tab: the filter bar and the pager wait for them, and they are
+  // still here when the grid is shown again.
   useEffect(() => {
-    setDirty(conn.id, doc.id, changes.size > 0);
-  }, [changes.size, conn.id, doc.id, setDirty]);
-  useEffect(() => () => setDirty(conn.id, doc.id, false), [conn.id, doc.id, setDirty]);
+    setEdits(conn.id, doc.id, changes.size ? { set, changes } : undefined);
+  }, [changes, set, conn.id, doc.id, setEdits]);
 
-  // A new result (re-run, refresh, saved edits) starts clean; the selection stays if it still fits.
+  // A new result (saved edits, another result of the same run) starts clean; the selection stays if
+  // it still fits.
+  const shownSet = useRef(set);
   useEffect(() => {
+    if (shownSet.current === set) return;
+    shownSet.current = set;
     setChanges(new Map());
     setEditing(null);
     setEditError(null);

@@ -18,6 +18,7 @@ import type {
   EnvironmentDef,
   HistoryEntry,
   QueryOutput,
+  ResultSet,
   RowEdit,
   SavedQuery,
   SessionInfo,
@@ -45,6 +46,11 @@ export interface DocTab {
   count?: { sql: string; rows: number | null };
   /** The grid has edits that are not saved yet. */
   dirty?: boolean;
+  /**
+   * Those edits, by cell, with the result they were made on. Kept here, not in the grid, so they
+   * survive switching tabs, connections, the JSON view or the diagram.
+   */
+  edits?: { set: ResultSet; changes: Map<string, string | null> };
   /** Query tabs opened from (or saved as) a saved query: ⌘S updates that query. */
   savedId?: string;
 }
@@ -137,7 +143,8 @@ interface State {
   cycleDoc(connId: string, step: 1 | -1): void;
   /** Filter and sort a table tab on the server, and run its new query. */
   setTableView(connId: string, docId: string, view: TableView): void;
-  setDirty(connId: string, docId: string, dirty: boolean): void;
+  /** The grid's unsaved edits (`undefined` once there are none). */
+  setEdits(connId: string, docId: string, edits: DocTab["edits"]): void;
   /** Count the rows a table tab's filters match (only on request: it can be slow on big tables). */
   countTable(connId: string, docId: string): Promise<void>;
 
@@ -415,9 +422,10 @@ export const useApp = create<State>((set, get) => ({
     }
   },
 
-  setDirty(connId, docId, dirty) {
+  setEdits(connId, docId, edits) {
     const doc = get().conns.find((c) => c.id === connId)?.docs.find((d) => d.id === docId);
-    if (doc && !!doc.dirty !== dirty) set((s) => ({ conns: patchDoc(s.conns, connId, docId, { dirty }) }));
+    if (doc && (doc.edits !== edits || !!doc.dirty !== !!edits))
+      set((s) => ({ conns: patchDoc(s.conns, connId, docId, { edits, dirty: !!edits }) }));
   },
 
   setSql(connId, docId, sql) {
@@ -427,8 +435,11 @@ export const useApp = create<State>((set, get) => ({
   async run(connId, docId, sql, confirmed = false) {
     const conn = get().conns.find((c) => c.id === connId);
     if (!conn || !sql.trim()) return;
+    const doc = conn.docs.find((d) => d.id === docId);
+    // A new result would throw away edits that are not saved yet.
+    if (doc?.dirty) return showToast("Save or discard your changes in the grid before running the query again.", "error");
     // What runs from a query tab goes into the history; browsing a table doesn't.
-    const record = conn.docs.find((d) => d.id === docId)?.kind === "query";
+    const record = doc?.kind === "query";
     if (!confirmed && conn.profile.confirmWrites && splitStatements(sql).some((s) => isWrite(s.text))) {
       set({ pendingWrite: { connId, docId, sql } });
       return;
