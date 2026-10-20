@@ -105,6 +105,8 @@ interface State {
   sheet: Sheet;
   connecting: string | null;
   connectError: AppError | null;
+  /** The connection `connectError` is about, so it can be tried again (after trusting its host key). */
+  failedProfile: string | null;
   pendingWrite: PendingWrite | null;
   environments: EnvironmentDef[];
   envSheet: boolean;
@@ -198,6 +200,7 @@ export const useApp = create<State>((set, get) => ({
   sheet: null,
   connecting: null,
   connectError: null,
+  failedProfile: null,
   pendingWrite: null,
   temporary: {},
   saveSheet: null,
@@ -252,7 +255,7 @@ export const useApp = create<State>((set, get) => ({
   async openConnection(profileId) {
     const profile = get().profiles.find((p) => p.id === profileId) ?? get().temporary[profileId];
     if (!profile) return;
-    set({ connecting: profileId, connectError: null });
+    set({ connecting: profileId, connectError: null, failedProfile: null });
     try {
       const info = await api.openSession(profileId);
       const first = queryDoc([]);
@@ -263,7 +266,7 @@ export const useApp = create<State>((set, get) => ({
       get().loadSaved(tab.id);
       get().loadProfiles();
     } catch (e) {
-      set({ connecting: null, connectError: e as AppError });
+      set({ connecting: null, connectError: e as AppError, failedProfile: profileId });
     }
   },
 

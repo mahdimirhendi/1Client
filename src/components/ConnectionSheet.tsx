@@ -177,7 +177,12 @@ export function ConnectionSheet() {
 
   const trustAndRetry = async (err: AppError) => {
     if (!err.host || !err.port || !err.key) return;
-    await api.trustHostKey(err.host, err.port, err.key);
+    try {
+      await api.trustHostKey(err.host, err.port, err.key);
+    } catch (e) {
+      // e.g. ~/.ssh/known_hosts can't be written.
+      return setTest({ state: "error", error: e as AppError });
+    }
     runTest();
   };
 
