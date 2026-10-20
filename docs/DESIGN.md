@@ -64,6 +64,8 @@ Window
 - Clicking a header sorts ascending, then descending, then back to the original order.
 - Table tabs have a filter bar above the grid: column, operator and value per row, joined with
   "Match all" or "Match any", and an SQL mode for a condition typed by hand. Enter applies.
+- Below the grid of a table tab, a pager shows the rows on screen ("Rows 201–400 of 4,532") with
+  first / previous / next / last buttons, and Count Rows when the total isn't known yet.
 - Copy actions confirm with a short toast at the bottom of the window.
 
 ## Environments and color tags

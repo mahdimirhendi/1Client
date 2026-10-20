@@ -4,7 +4,8 @@ import { create } from "zustand";
 import { copyWithFeedback } from "../lib/clipboard";
 import { buildRowEdits, cellKey, editableColumns, type Changes } from "../lib/edit";
 import { NUMERIC_TYPE, sortedRows, type SortDir } from "../lib/sort";
-import { TABLE_ROWS, tableSql, type Filter } from "../lib/sql";
+import { countSql, TABLE_ROWS, tableSql, type Filter } from "../lib/sql";
+import { showToast } from "../lib/toast";
 import { useApp, type ConnTab, type DocTab } from "../store";
 import type { AppError, ResultSet } from "../types";
 import { openMenu } from "./ContextMenu";
@@ -104,9 +105,67 @@ export function Results({ conn, doc }: { conn: ConnTab; doc: DocTab }) {
       ) : view === "json" ? (
         <JsonView set={current} />
       ) : (
-        <Grid conn={conn} doc={doc} set={current} setIdx={idx} />
+        <>
+          <Grid conn={conn} doc={doc} set={current} setIdx={idx} />
+          {isTableView(conn, doc) && <TablePager conn={conn} doc={doc} shown={current.rows.length} />}
+        </>
       )}
     </section>
+  );
+}
+
+/** A table tab still running its own query: filtering, sorting and paging happen on the server. */
+const isTableView = (conn: ConnTab, doc: DocTab) =>
+  !!doc.table && doc.sql === tableSql(conn.profile.engine, doc.table, doc.view);
+
+/** Pages of a table tab, `TABLE_ROWS` at a time from the server, and the row count on request. */
+function TablePager({ conn, doc, shown }: { conn: ConnTab; doc: DocTab; shown: number }) {
+  const { setTableView, countTable } = useApp();
+  const page = doc.view?.page ?? 0;
+  const first = page * TABLE_ROWS;
+  // A count made for other filters says nothing about these.
+  const count = doc.count?.sql === countSql(conn.profile.engine, doc.table!, doc.view) ? doc.count : undefined;
+  const total = count?.rows ?? null;
+  const lastPage = total === null ? null : Math.max(0, Math.ceil(total / TABLE_ROWS) - 1);
+  const hasNext = lastPage === null ? shown === TABLE_ROWS : page < lastPage;
+
+  const go = (p: number) => {
+    if (doc.dirty) return showToast("Save or discard your changes before changing pages.", "error");
+    setTableView(conn.id, doc.id, { ...doc.view, page: p || undefined });
+  };
+
+  return (
+    <div className="pager table-pager">
+      {count ? (
+        <span className="muted small">{total === null ? "Counting…" : `${total.toLocaleString()} row${total === 1 ? "" : "s"}`}</span>
+      ) : (
+        <button className="btn small" title="Count the rows that match the filters" onClick={() => countTable(conn.id, doc.id)}>
+          Count Rows
+        </button>
+      )}
+      <div className="grow" />
+      <span className="muted small">
+        {shown ? `Rows ${(first + 1).toLocaleString()}–${(first + shown).toLocaleString()}` : page ? "No rows on this page" : "No rows"}
+        {total !== null && shown ? ` of ${total.toLocaleString()}` : ""}
+      </span>
+      <div className="pager-nav">
+        <button className="btn small" aria-label="First page" disabled={page === 0} onClick={() => go(0)}>
+          «
+        </button>
+        <button className="btn small" aria-label="Previous page" disabled={page === 0} onClick={() => go(page - 1)}>
+          ‹
+        </button>
+        <span className="small pager-count">{page + 1}</span>
+        <button className="btn small" aria-label="Next page" disabled={!hasNext} onClick={() => go(page + 1)}>
+          ›
+        </button>
+        {lastPage !== null && (
+          <button className="btn small" aria-label="Last page" disabled={page >= lastPage} onClick={() => go(lastPage)}>
+            »
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -114,12 +173,7 @@ function summary(doc: DocTab, set?: ResultSet) {
   if (doc.running) return "Running…";
   if (!doc.output || !set) return "";
   const n = set.columns.length ? set.rows.length : (set.rowCount ?? 0);
-  // A table tab stops at TABLE_ROWS; saying "first" keeps that from reading as the table's size.
-  const label = !set.columns.length
-    ? `${n} affected`
-    : doc.table && n === TABLE_ROWS
-      ? `First ${n} rows`
-      : `${n.toLocaleString()} row${n === 1 ? "" : "s"}`;
+  const label = set.columns.length ? `${n.toLocaleString()} row${n === 1 ? "" : "s"}` : `${n} affected`;
   return `${label}${set.truncated ? " (first 10,000 shown)" : ""} · ${doc.output.elapsedMs} ms`;
 }
 
@@ -151,7 +205,9 @@ function Grid({ conn, doc, set, setIdx }: { conn: ConnTab; doc: DocTab; set: Res
 
   // A table tab still running its own query is filtered and sorted by the server, so both cover
   // the whole table and not just the loaded rows. Any other result sorts the rows it has.
-  const serverView = !!doc.table && doc.sql === tableSql(conn.profile.engine, doc.table, doc.view);
+  const serverView = isTableView(conn, doc);
+  /** Row numbers continue across the pages of a table tab (page 2 starts at 201). */
+  const firstRow = serverView ? (doc.view?.page ?? 0) * TABLE_ROWS : 0;
 
   /** Display position → row index. */
   const order = useMemo(() => {
@@ -178,7 +234,7 @@ function Grid({ conn, doc, set, setIdx }: { conn: ConnTab; doc: DocTab; set: Res
     const name = set.columns[ci].name;
     if (!serverView) return setLocalSort(dir ? { col: ci, name, dir } : null);
     if (changes.size) return setEditError("Save or discard your changes before sorting the table.");
-    setTableView(conn.id, doc.id, { ...doc.view, sort: dir ? { column: name, dir } : undefined });
+    setTableView(conn.id, doc.id, { ...doc.view, sort: dir ? { column: name, dir } : undefined, page: undefined });
   };
 
   /** Show only the rows where this column has (or, with `exclude`, doesn't have) this value. */
@@ -187,7 +243,7 @@ function Grid({ conn, doc, set, setIdx }: { conn: ConnTab; doc: DocTab; set: Res
     const op = v === null ? (exclude ? "notNull" : "isNull") : exclude ? "ne" : "eq";
     const filter: Filter = { column: set.columns[ci].name, op, value: v ?? "" };
     // Added to the column filters, so a condition typed in SQL mode makes way for them.
-    setTableView(conn.id, doc.id, { ...doc.view, where: undefined, filters: [...(doc.view?.filters ?? []), filter] });
+    setTableView(conn.id, doc.id, { ...doc.view, where: undefined, filters: [...(doc.view?.filters ?? []), filter], page: undefined });
   };
 
   // The filter bar and other tabs need to know about unsaved edits, so they don't run over them.
@@ -374,7 +430,7 @@ function Grid({ conn, doc, set, setIdx }: { conn: ConnTab; doc: DocTab; set: Res
                   className={`grid-row ${vr.index % 2 ? "alt" : ""}`}
                   style={{ gridTemplateColumns: template, transform: `translateY(${vr.start}px)` }}
                 >
-                  <div className="grid-num">{vr.index + 1}</div>
+                  <div className="grid-num">{firstRow + vr.index + 1}</div>
                   {set.columns.map((col, ci) => {
                     const v = value(r, ci);
                     const selected = sel?.[0] === r && sel?.[1] === ci;

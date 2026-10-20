@@ -58,8 +58,11 @@ by a command-line tool.
   result. Edits become one `UPDATE … WHERE <primary key>` per row, all in one transaction, and each
   must change exactly one row or everything is rolled back. PostgreSQL gets escaped literals (the
   confirmation dialog shows the exact SQL); MySQL uses bound parameters.
-- **Filtering and sorting.** A table tab opened from the sidebar is filtered and sorted by the server
-  (`WHERE …`, then `ORDER BY …` with NULLs last), so both cover the whole table. Filter values are
+- **Filtering, sorting and paging.** A table tab opened from the sidebar is filtered, sorted and paged
+  by the server (`WHERE …`, `ORDER BY …` with NULLs last, `LIMIT 200 OFFSET …`), so all of it covers
+  the whole table. Without a chosen sort the rows are ordered by the primary key, so pages never
+  overlap or skip rows. The row count is a separate `count(*)` run only when asked, because it can be
+  slow on big tables. Filter values are
   always sent as quoted, escaped literals that the server converts to the column's type; text matching
   (`contains`, `starts with`, …) compares the column as text, ignoring case, with `!` as the `LIKE`
   escape character so `%` and `_` in a value are matched literally. A condition typed in SQL mode is

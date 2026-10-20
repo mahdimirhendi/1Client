@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { api } from "./api";
-import { isWrite, queryName, splitStatements, tableSql, type TableRef, type TableView } from "./lib/sql";
+import { countSql, isWrite, queryName, splitStatements, tableSql, type TableRef, type TableView } from "./lib/sql";
 import { showToast } from "./lib/toast";
 import type {
   AppError,
@@ -29,8 +29,10 @@ export interface DocTab {
   showEditor: boolean;
   /** Table tabs: the table shown, so filtering and sorting can be done by the server. */
   table?: TableRef;
-  /** Table tabs: the filters and sort of the current query. */
+  /** Table tabs: the filters, sort and page of the current query. */
   view?: TableView;
+  /** Table tabs: rows matching the filters, for the count query in `sql` (`rows` is null while counting). */
+  count?: { sql: string; rows: number | null };
   /** The grid has edits that are not saved yet. */
   dirty?: boolean;
   /** Query tabs opened from (or saved as) a saved query: ⌘S updates that query. */
@@ -118,6 +120,8 @@ interface State {
   /** Filter and sort a table tab on the server, and run its new query. */
   setTableView(connId: string, docId: string, view: TableView): void;
   setDirty(connId: string, docId: string, dirty: boolean): void;
+  /** Count the rows a table tab's filters match (only on request: it can be slow on big tables). */
+  countTable(connId: string, docId: string): Promise<void>;
 
   loadHistory(connId: string): Promise<void>;
   loadSaved(connId: string): Promise<void>;
@@ -304,7 +308,8 @@ export const useApp = create<State>((set, get) => ({
     if (!conn) return;
     const existing = conn.docs.find((d) => d.table?.schema === table.schema && d.table.name === table.name);
     if (existing) return get().activateDoc(connId, existing.id);
-    const ref = { schema: table.schema, name: table.name };
+    const key = table.columns.filter((c) => c.primaryKey).map((c) => c.name);
+    const ref: TableRef = { schema: table.schema, name: table.name, ...(key.length ? { key } : {}) };
     const sql = tableSql(conn.profile.engine, ref);
     // Same-named tables in other schemas (public.orders, mart.orders) get the schema in their title.
     const title = table.schema === defaultSchema(conn.profile) ? table.name : `${table.schema}.${table.name}`;
@@ -353,6 +358,22 @@ export const useApp = create<State>((set, get) => ({
     const sql = tableSql(conn.profile.engine, doc.table, view);
     set((s) => ({ conns: patchDoc(s.conns, connId, docId, { view, sql }) }));
     get().run(connId, docId, sql, true);
+  },
+
+  async countTable(connId, docId) {
+    const conn = get().conns.find((c) => c.id === connId);
+    const doc = conn?.docs.find((d) => d.id === docId);
+    if (!conn || !doc?.table) return;
+    const sql = countSql(conn.profile.engine, doc.table, doc.view);
+    set((s) => ({ conns: patchDoc(s.conns, connId, docId, { count: { sql, rows: null } }) }));
+    try {
+      const out = await api.runQuery(connId, sql);
+      const rows = Number(out.sets[0]?.rows[0]?.[0]);
+      set((s) => ({ conns: patchDoc(s.conns, connId, docId, { count: Number.isFinite(rows) ? { sql, rows } : undefined }) }));
+    } catch (e) {
+      set((s) => ({ conns: patchDoc(s.conns, connId, docId, { count: undefined }) }));
+      showToast(`Couldn't count the rows: ${(e as AppError).message}`, "error");
+    }
   },
 
   setDirty(connId, docId, dirty) {

@@ -422,3 +422,4 @@ input, textarea, .cm-content, .grid-cell, pre { user-select: text; -webkit-user-
 .query-clear { align-self: flex-start; margin: 8px 8px 0; }
 .sidebar-note { padding: 14px 8px; font-size: var(--text-sm); color: var(--label-secondary); line-height: 1.45; }
 .doc-tab-dot { color: var(--label-secondary); font-size: 15px; line-height: 1; margin-left: -2px; }
+.table-pager { border-top: .5px solid var(--separator); }

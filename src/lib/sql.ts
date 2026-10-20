@@ -84,12 +84,14 @@ export function quoteIdent(engine: Engine, name: string): string {
   return engine === "mysql" ? "`" + name.replace(/`/g, "``") + "`" : '"' + name.replace(/"/g, '""') + '"';
 }
 
-/** Rows loaded when a table is opened from the sidebar. */
+/** Rows in one page of a table tab. */
 export const TABLE_ROWS = 200;
 
 export interface TableRef {
   schema: string;
   name: string;
+  /** Primary key columns: the order when no sort is chosen, so pages don't overlap or skip rows. */
+  key?: string[];
 }
 
 export interface Sort {
@@ -148,6 +150,8 @@ export interface TableView {
   match?: "all" | "any";
   /** A condition typed by hand, used instead of `filters` when set. */
   where?: string;
+  /** Page of `TABLE_ROWS` rows, from 0. */
+  page?: number;
 }
 
 /** A string literal that means the same whatever the server settings are. */
@@ -200,18 +204,30 @@ export function whereSql(engine: Engine, filters: Filter[] = [], match: TableVie
     .join(match === "any" ? " OR " : " AND ");
 }
 
-/** The query of a table tab: its filters (or hand-written condition), its sort (NULLs last), the row limit. */
+const fromTable = (engine: Engine, table: TableRef) => `${quoteIdent(engine, table.schema)}.${quoteIdent(engine, table.name)}`;
+const viewWhere = (engine: Engine, view: TableView) => view.where?.trim() || whereSql(engine, view.filters, view.match);
+
+/** How many rows a table tab's filters match, counted only when asked (it can be slow on big tables). */
+export function countSql(engine: Engine, table: TableRef, view: TableView = {}): string {
+  const where = viewWhere(engine, view);
+  return `SELECT count(*) FROM ${fromTable(engine, table)}${where ? ` WHERE ${where}` : ""};`;
+}
+
+/** The query of a table tab: its filters (or hand-written condition), its sort (NULLs last), then one page. */
 export function tableSql(engine: Engine, table: TableRef, view: TableView = {}): string {
-  const from = `${quoteIdent(engine, table.schema)}.${quoteIdent(engine, table.name)}`;
-  const where = view.where?.trim() || whereSql(engine, view.filters, view.match);
+  const from = fromTable(engine, table);
+  const where = viewWhere(engine, view);
   let order = "";
   if (view.sort) {
     const col = quoteIdent(engine, view.sort.column);
     const dir = view.sort.dir.toUpperCase();
     // MySQL has no NULLS LAST; sorting on "IS NULL" first does the same.
     order = engine === "postgres" ? ` ORDER BY ${col} ${dir} NULLS LAST` : ` ORDER BY ${col} IS NULL, ${col} ${dir}`;
+  } else if (table.key?.length) {
+    order = ` ORDER BY ${table.key.map((k) => quoteIdent(engine, k)).join(", ")}`;
   }
-  return `SELECT * FROM ${from}${where ? ` WHERE ${where}` : ""}${order} LIMIT ${TABLE_ROWS};`;
+  const offset = view.page ? ` OFFSET ${view.page * TABLE_ROWS}` : "";
+  return `SELECT * FROM ${from}${where ? ` WHERE ${where}` : ""}${order} LIMIT ${TABLE_ROWS}${offset};`;
 }
 
 /** A name to offer when saving a query: a leading `-- comment`, or else the first line of the SQL. */

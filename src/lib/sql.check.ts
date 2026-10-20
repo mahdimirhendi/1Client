@@ -1,6 +1,6 @@
 // Quick check of the SQL helpers (table filters, table queries, saved query names): npm run check:sql
 import assert from "node:assert/strict";
-import { queryName, sqlLiteral, tableSql, whereSql, type Filter } from "./sql.ts";
+import { countSql, queryName, sqlLiteral, tableSql, whereSql, type Filter } from "./sql.ts";
 
 const f = (column: string, op: Filter["op"], value = ""): Filter => ({ column, op, value });
 const pg = (...filters: Filter[]) => whereSql("postgres", filters);
@@ -52,6 +52,22 @@ assert.equal(
   `SELECT * FROM "public"."orders" WHERE created_at > now() - interval '7 days' LIMIT 200;`,
 );
 assert.equal(tableSql("postgres", table, { where: "   " }), `SELECT * FROM "public"."orders" LIMIT 200;`);
+
+// Without a chosen sort, the primary key orders the rows, so pages are stable.
+const keyed = { schema: "public", name: "order_items", key: ["order_id", "line"] };
+assert.equal(tableSql("postgres", keyed, { page: 1 }), `SELECT * FROM "public"."order_items" ORDER BY "order_id", "line" LIMIT 200 OFFSET 200;`);
+assert.equal(
+  tableSql("postgres", keyed, { sort: { column: "qty", dir: "asc" } }),
+  `SELECT * FROM "public"."order_items" ORDER BY "qty" ASC NULLS LAST LIMIT 200;`,
+);
+
+// Pages, and the count of what the filters match.
+assert.equal(tableSql("postgres", table, { page: 2 }), `SELECT * FROM "public"."orders" LIMIT 200 OFFSET 400;`);
+assert.equal(tableSql("postgres", table, { page: 0 }), `SELECT * FROM "public"."orders" LIMIT 200;`);
+assert.equal(
+  countSql("mysql", { schema: "shop", name: "orders" }, { filters: [f("status", "eq", "paid")], sort: { column: "id", dir: "asc" }, page: 3 }),
+  "SELECT count(*) FROM `shop`.`orders` WHERE `status` = 'paid';",
+);
 
 // Names offered when saving a query.
 assert.equal(queryName("-- Top customers by revenue\nSELECT 1"), "Top customers by revenue");

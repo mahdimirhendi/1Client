@@ -197,33 +197,50 @@ function matches(cond: string, row: Cell[], cols: string[]): boolean {
   return true;
 }
 
-/** `SELECT * FROM "schema"."table" [WHERE …] [ORDER BY "col" ASC|DESC …] LIMIT n`, as table tabs send it. */
-function tableQuery(sql: string): QueryOutput | null {
-  const m = /^\s*select \* from ["`](\w+)["`]\.["`](\w+)["`](?: where (.*?))?(?: order by ["`](\w+)["`](?: is null, ["`]\w+["`])? (asc|desc)(?: nulls last)?)? limit \d+;?\s*$/is.exec(sql);
-  const t = m && tables.find((x) => x.info.schema === m[1] && x.info.name === m[2]);
-  if (!m || !t) return null;
+const findTable = (schema: string, name: string) => tables.find((x) => x.info.schema === schema && x.info.name === name);
+
+/** The rows of a table that match a WHERE clause from the filter bar. */
+function filtered(t: MockTable, where: string | undefined): Cell[][] {
   const names = t.info.columns.map((c) => c.name);
-  let rows = t.rows.map((r) => [...r]);
-  if (m[3]) {
-    const { conds, any } = splitWhere(m[3]);
-    rows = rows.filter((r) => (any ? conds.some((c) => matches(c, r, names)) : conds.every((c) => matches(c, r, names))));
+  const rows = t.rows.map((r) => [...r]);
+  if (!where) return rows;
+  const { conds, any } = splitWhere(where);
+  return rows.filter((r) => (any ? conds.some((c) => matches(c, r, names)) : conds.every((c) => matches(c, r, names))));
+}
+
+/**
+ * The queries table tabs send: `SELECT * FROM "schema"."table" [WHERE …] [ORDER BY …] LIMIT n [OFFSET m]`,
+ * and `SELECT count(*) FROM "schema"."table" [WHERE …]` for Count Rows.
+ */
+function tableQuery(sql: string): QueryOutput | null {
+  const count = /^\s*select count\(\*\) from ["`](\w+)["`]\.["`](\w+)["`](?: where (.*?))?;?\s*$/is.exec(sql);
+  const counted = count && findTable(count[1], count[2]);
+  if (count && counted) {
+    const n = String(filtered(counted, count[3]).length);
+    return { sets: [{ columns: [{ name: "count", typeName: "int8" }], rows: [[n]], rowCount: 1, truncated: false }], elapsedMs: 6 };
   }
-  const col = m[4] ? names.indexOf(m[4]) : -1;
+  const m = /^\s*select \* from ["`](\w+)["`]\.["`](\w+)["`](?: where (.*?))?(?: order by ["`](\w+)["`](?:(?: is null, ["`]\w+["`])? (asc|desc)(?: nulls last)?|(?:, ["`]\w+["`])*))? limit (\d+)(?: offset (\d+))?;?\s*$/is.exec(sql);
+  const t = m && findTable(m[1], m[2]);
+  if (!m || !t) return null;
+  let rows = filtered(t, m[3]);
+  const col = m[4] ? t.info.columns.findIndex((c) => c.name === m[4]) : -1;
   if (col >= 0) {
     const numeric = /int|numeric/.test(t.info.columns[col].dataType);
-    const sign = m[5].toLowerCase() === "desc" ? -1 : 1;
+    const sign = m[5]?.toLowerCase() === "desc" ? -1 : 1;
     rows = rows.sort((a, b) => {
       const [x, y] = [a[col], b[col]];
       if (x === null || y === null) return x === y ? 0 : x === null ? 1 : -1;
       return sign * (numeric ? Number(x) - Number(y) : x.localeCompare(y));
     });
   }
+  const offset = Number(m[7] ?? 0);
+  rows = rows.slice(offset, offset + Number(m[6]));
   const columns: ColumnMeta[] = t.info.columns.map((c) => ({
     name: c.name,
     typeName: PG_TYPE[c.dataType] ?? c.dataType,
     source: t.info.kind === "table" ? { schema: t.info.schema, table: t.info.name, column: c.name } : undefined,
   }));
-  return { sets: [{ columns, rows: rows.slice(0, 200), rowCount: Math.min(rows.length, 200), truncated: false }], elapsedMs: 14 };
+  return { sets: [{ columns, rows, rowCount: rows.length, truncated: false }], elapsedMs: 14 };
 }
 
 /** What the mock answers to SQL typed in a query tab. Throws like the backend on errors. */

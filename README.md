@@ -50,6 +50,7 @@ connection is tagged with its environment so you always know where you are.
   condition in SQL. Right-click a cell to filter by its value or exclude it.
 - **Sort** by clicking a column header: numbers, dates and text all sort correctly. Tables opened
   from the sidebar are filtered and sorted by the server, so both cover the whole table.
+- **Page** through big tables 200 rows at a time, and count the matching rows when you need the total.
 - **Edit cells** in place, including setting nullable columns to `NULL`. Changes stay highlighted until
   you save (⌘S); they run as `UPDATE … WHERE <primary key>` in one transaction.
 - Copy a value, a row, a row as JSON, a page or all rows, with a confirmation each time.
