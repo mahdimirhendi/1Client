@@ -207,7 +207,8 @@ export function ConnectionSheet() {
   ];
 
   return (
-    <div className="sheet-backdrop" onMouseDown={(e) => e.target === e.currentTarget && setSheet(null)}>
+    // A click next to the sheet doesn't close it: that would lose what was typed. Escape is Cancel.
+    <div className="sheet-backdrop" onKeyDown={(e) => e.key === "Escape" && !e.defaultPrevented && setSheet(null)}>
       {step === "pick" ? (
         <div className="sheet" style={{ width: 720 }}>
           <div className="sheet-head center">

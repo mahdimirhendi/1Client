@@ -27,6 +27,7 @@ import { create } from "zustand";
 import { copyText, pasteText } from "../lib/clipboard";
 import { smartComplete, smartSource } from "../lib/smartComplete";
 import { splitStatements, statementAt } from "../lib/sql";
+import { showToast } from "../lib/toast";
 import { openMenu } from "./ContextMenu";
 import { useApp, type ConnTab, type DocTab } from "../store";
 import type { TableInfo } from "../types";
@@ -383,8 +384,8 @@ function formatIn(v: EditorView, engine: string) {
     });
     v.dispatch({ changes: { from, to, insert: out }, userEvent: "input.format" });
   } catch (e) {
-    useEditorStatus.setState({ selected: 0 });
-    console.warn("format failed", e);
+    // The formatter doesn't know every dialect corner; say so instead of doing nothing.
+    showToast(`Couldn't format this SQL: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`, "error");
   }
 }
 
