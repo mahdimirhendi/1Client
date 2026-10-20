@@ -71,13 +71,25 @@ export function statementAt(sql: string, pos: number): Statement | null {
   return best ?? all[0] ?? null;
 }
 
-const WRITE = /^(insert|update|delete|merge|replace|upsert|create|alter|drop|truncate|rename|grant|revoke|comment|call|do|vacuum|reindex|cluster|set\s+global)\b/i;
+const WRITE =
+  /^(insert|update|delete|merge|replace|upsert|create|alter|drop|truncate|rename|grant|revoke|comment|call|do|vacuum|reindex|cluster|refresh|reassign|security|import|lock|load|execute|optimize|repair|flush|kill|install|uninstall|shutdown|set\s+(global|persist))\b/i;
 
+/**
+ * Whether a statement may change data or the server, for "Ask before running writes". When in
+ * doubt it says yes: asking once too often is better than not asking.
+ */
 export function isWrite(statement: string): boolean {
   const s = stripComments(statement).trim();
   if (WRITE.test(s)) return true;
-  // WITH ... UPDATE / DELETE / INSERT
-  return /^with\b/i.test(s) && /\b(update|delete|insert)\b/i.test(s);
+  // EXPLAIN ANALYZE runs the statement it explains.
+  const explain = /^explain\s*(?:\([^)]*\banalyze\b[^)]*\)|analyze\b)(?:\s+verbose\b)?\s*/i.exec(s);
+  if (explain) return isWrite(s.slice(explain[0].length));
+  // COPY ... FROM loads rows, and COPY ... TO a file or a program runs on the server.
+  if (/^copy\b/i.test(s)) return !/\bto\s+stdout\b/i.test(s);
+  // WITH ... UPDATE / DELETE / INSERT / MERGE
+  if (/^with\b/i.test(s) && /\b(update|delete|insert|merge)\b/i.test(s)) return true;
+  // SELECT ... INTO makes a table (PostgreSQL) or writes a file (MySQL INTO OUTFILE).
+  return /^(select|with)\b[\s\S]*\binto\b/i.test(s);
 }
 
 export function quoteIdent(engine: Engine, name: string): string {

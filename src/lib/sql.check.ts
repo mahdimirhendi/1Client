@@ -1,6 +1,6 @@
 // Quick check of the SQL helpers (table filters, table queries, saved query names): npm run check:sql
 import assert from "node:assert/strict";
-import { countSql, defaultSchema, queryName, sqlLiteral, tableSql, whereSql, type Filter } from "./sql.ts";
+import { countSql, defaultSchema, isWrite, queryName, sqlLiteral, tableSql, whereSql, type Filter } from "./sql.ts";
 
 const f = (column: string, op: Filter["op"], value = ""): Filter => ({ column, op, value });
 const pg = (...filters: Filter[]) => whereSql("postgres", filters);
@@ -78,5 +78,26 @@ assert.equal(queryName("-- Top customers by revenue\nSELECT 1"), "Top customers 
 assert.equal(queryName("  select *\n  from orders;"), "select *");
 assert.equal(queryName("SELECT id, name,\nFROM t"), "SELECT id, name");
 assert.equal(queryName("x".repeat(80)).length, 60);
+
+// "Ask before running writes": anything that may change data asks, plain reads don't.
+for (const w of [
+  "UPDATE t SET a = 1",
+  "  -- tidy up\n  delete from t",
+  "WITH x AS (DELETE FROM t RETURNING *) SELECT * FROM x",
+  "EXPLAIN ANALYZE DELETE FROM t",
+  "EXPLAIN (ANALYZE, BUFFERS) UPDATE t SET a = 1",
+  "COPY t FROM STDIN",
+  "COPY (SELECT 1) TO PROGRAM 'rm -rf /'",
+  "SELECT * INTO archive FROM t",
+  "SELECT * FROM t INTO OUTFILE '/tmp/x'",
+  "REFRESH MATERIALIZED VIEW mv",
+  "LOAD DATA INFILE '/tmp/x' INTO TABLE t",
+  "EXECUTE purge(1)",
+  "SET PERSIST max_connections = 10",
+  "OPTIMIZE TABLE t",
+  "LOCK TABLE t",
+]) assert.ok(isWrite(w), w);
+for (const r of ["SELECT * FROM t", "EXPLAIN SELECT * FROM t", "EXPLAIN ANALYZE SELECT 1", "COPY t TO STDOUT", "WITH x AS (SELECT 1) SELECT * FROM x", "SHOW tables", "SET search_path = app"])
+  assert.ok(!isWrite(r), r);
 
 console.log("sql: all checks passed");
