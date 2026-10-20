@@ -7,7 +7,6 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -80,22 +79,9 @@ pub struct QueryStore {
     saved: Vec<SavedQuery>,
 }
 
-fn now_ms() -> u64 {
+/// Unix time in milliseconds.
+pub(crate) fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or_default()
-}
-
-/// Read a file of ours. One that can't be parsed is moved aside (`*.json.invalid`) so the app still
-/// starts and the next save doesn't overwrite what might be recovered from it.
-fn load<T: DeserializeOwned + Default>(path: &Path) -> Result<T> {
-    match json_file::read(path) {
-        Ok(v) => Ok(v.unwrap_or_default()),
-        Err(Error::Config(why)) => {
-            tracing::warn!("{why}; moving it aside");
-            std::fs::rename(path, path.with_extension("json.invalid"))?;
-            Ok(T::default())
-        }
-        Err(e) => Err(e),
-    }
 }
 
 impl QueryStore {
@@ -103,8 +89,8 @@ impl QueryStore {
         std::fs::create_dir_all(dir)?;
         let history_path = dir.join("history.json");
         let saved_path = dir.join("saved_queries.json");
-        let history = load::<HistoryFile>(&history_path)?.history;
-        let saved = load::<SavedFile>(&saved_path)?.queries;
+        let history = json_file::read_or_set_aside::<HistoryFile>(&history_path)?.unwrap_or_default().history;
+        let saved = json_file::read_or_set_aside::<SavedFile>(&saved_path)?.unwrap_or_default().queries;
         Ok(Self { history_path, saved_path, history, saved })
     }
 
