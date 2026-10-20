@@ -37,17 +37,26 @@ pub(crate) async fn connect(
         SslMode::VerifyFull => Conn::new(base.ssl_opts(Some(tls(true)))).await.map_err(classify)?,
         SslMode::Prefer => match Conn::new(base.clone().ssl_opts(Some(tls(false)))).await {
             Ok(c) => c,
-            Err(first) => match Conn::new(base).await {
-                Ok(c) => c,
-                // Report the TLS attempt's error unless the plain one is more specific.
-                Err(second) => {
-                    let (a, b) = (classify(first), classify(second));
-                    match (&a, &b) {
-                        (Error::DbConnect { stage: DbStage::Tls, .. }, _) => return Err(b),
-                        _ => return Err(a),
+            Err(first) => {
+                let first = classify(first);
+                // The server answered and refused the sign-in: trying again without TLS would only
+                // count a second failed login against the account.
+                if matches!(first, Error::DbConnect { stage: DbStage::Auth | DbStage::Database, .. }) {
+                    return Err(first);
+                }
+                match Conn::new(base).await {
+                    Ok(c) => c,
+                    // Report the TLS attempt's error unless the plain one is more specific.
+                    Err(second) => {
+                        let second = classify(second);
+                        return Err(if matches!(first, Error::DbConnect { stage: DbStage::Tls, .. }) {
+                            second
+                        } else {
+                            first
+                        });
                     }
                 }
-            },
+            }
         },
     };
 
