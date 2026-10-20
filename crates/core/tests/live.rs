@@ -108,11 +108,79 @@ async fn postgres_direct() {
 
     let tables = s.introspect().await.unwrap();
     eprintln!("{} tables", tables.len());
-    if let Some(orders) = tables.iter().find(|t| t.name == "orders") {
+    // Any `orders` table with a `customer_id` (other schemas may have an `orders` of their own).
+    let orders = tables.iter().find(|t| t.name == "orders" && t.columns.iter().any(|c| c.name == "customer_id"));
+    if let Some(orders) = orders {
         let fk = orders.columns.iter().find(|c| c.name == "customer_id").unwrap();
         eprintln!("orders.customer_id -> {:?}", fk.references);
         assert!(fk.references.as_deref().is_some_and(|r| r.ends_with("customers.id")));
     }
+}
+
+/// The referenced column of every foreign key column, as `table.column → schema.table.column`.
+fn references(tables: &[TableInfo], schema: &str) -> Vec<String> {
+    let mut out: Vec<String> = tables
+        .iter()
+        .filter(|t| t.schema == schema)
+        .flat_map(|t| t.columns.iter().filter(|c| c.foreign_key).map(move |c| (t, c)))
+        .map(|(t, c)| format!("{}.{} → {}", t.name, c.name, c.references.as_deref().unwrap_or("?")))
+        .collect();
+    out.sort();
+    out
+}
+
+#[tokio::test]
+#[ignore]
+async fn postgres_keys() {
+    let Some(d) = db_env("ONECLIENT_TEST_PG") else { return eprintln!("skip: ONECLIENT_TEST_PG") };
+    let secrets = ProfileSecrets { db_password: Some(d.password.clone()), ..Default::default() };
+    let s = Session::open(profile(Engine::Postgres, &d, SslMode::Prefer, Network::default()), &secrets).await.unwrap();
+    s.run(
+        "DROP SCHEMA IF EXISTS oneclient_keys CASCADE; CREATE SCHEMA oneclient_keys; SET search_path = oneclient_keys;
+         CREATE TABLE people (id int PRIMARY KEY); CREATE TABLE houses (id int PRIMARY KEY);
+         CREATE TABLE lines (order_id int, line int, PRIMARY KEY (order_id, line));
+         -- Same constraint name on two tables, and a composite key in reverse column order.
+         CREATE TABLE kids (id int PRIMARY KEY, parent int, CONSTRAINT fk_parent FOREIGN KEY (parent) REFERENCES people(id));
+         CREATE TABLE pets (id int PRIMARY KEY, home int, CONSTRAINT fk_parent FOREIGN KEY (home) REFERENCES houses(id));
+         CREATE TABLE shipments (id int PRIMARY KEY, l int, o int, FOREIGN KEY (l, o) REFERENCES lines(line, order_id));
+         RESET search_path",
+    )
+    .await
+    .unwrap();
+    let tables = s.introspect().await.unwrap();
+    s.run("DROP SCHEMA oneclient_keys CASCADE").await.unwrap();
+    assert_eq!(
+        references(&tables, "oneclient_keys"),
+        [
+            "kids.parent → oneclient_keys.people.id",
+            "pets.home → oneclient_keys.houses.id",
+            "shipments.l → oneclient_keys.lines.line",
+            "shipments.o → oneclient_keys.lines.order_id",
+        ]
+    );
+    let lines = tables.iter().find(|t| t.schema == "oneclient_keys" && t.name == "lines").unwrap();
+    assert!(lines.columns.iter().all(|c| c.primary_key), "both columns of a composite primary key");
+}
+
+#[tokio::test]
+#[ignore]
+async fn mysql_keys() {
+    let Some(d) = db_env("ONECLIENT_TEST_MYSQL") else { return eprintln!("skip: ONECLIENT_TEST_MYSQL") };
+    let secrets = ProfileSecrets { db_password: Some(d.password.clone()), ..Default::default() };
+    let s = Session::open(profile(Engine::Mysql, &d, SslMode::Prefer, Network::default()), &secrets).await.unwrap();
+    let drop = "DROP TABLE IF EXISTS oc_shipments, oc_lines";
+    s.run(drop).await.unwrap();
+    s.run("CREATE TABLE oc_lines (order_id INT, line INT, PRIMARY KEY (order_id, line))").await.unwrap();
+    s.run("CREATE TABLE oc_shipments (id INT PRIMARY KEY, l INT, o INT, FOREIGN KEY (o, l) REFERENCES oc_lines(order_id, line))")
+        .await
+        .unwrap();
+    let tables = s.introspect().await.unwrap();
+    s.run(drop).await.unwrap();
+    let mine: Vec<String> = references(&tables, &d.db).into_iter().filter(|r| r.starts_with("oc_")).collect();
+    assert_eq!(
+        mine,
+        [format!("oc_shipments.l → {}.oc_lines.line", d.db), format!("oc_shipments.o → {}.oc_lines.order_id", d.db)]
+    );
 }
 
 #[tokio::test]
@@ -153,7 +221,9 @@ async fn mysql_direct() {
 
     let tables = s.introspect().await.unwrap();
     eprintln!("{} tables", tables.len());
-    if let Some(orders) = tables.iter().find(|t| t.name == "orders") {
+    // Any `orders` table with a `customer_id` (other schemas may have an `orders` of their own).
+    let orders = tables.iter().find(|t| t.name == "orders" && t.columns.iter().any(|c| c.name == "customer_id"));
+    if let Some(orders) = orders {
         let fk = orders.columns.iter().find(|c| c.name == "customer_id").unwrap();
         eprintln!("orders.customer_id -> {:?}", fk.references);
         assert!(fk.references.as_deref().is_some_and(|r| r.ends_with("customers.id")));

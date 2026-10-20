@@ -14,23 +14,32 @@ pub(crate) enum DbConn {
 /// Columns of every user table and view, with key flags.
 pub(crate) fn introspection_sql(engine: Engine) -> &'static str {
     match engine {
+        // Keys come from pg_constraint: it pairs each column of a composite foreign key with the
+        // column it references, and ties constraints to their table (two tables in a schema may
+        // have foreign keys of the same name).
         Engine::Postgres => {
             r#"SELECT c.table_schema, c.table_name, t.table_type, c.column_name, c.data_type, c.is_nullable,
-       COALESCE(bool_or(tc.constraint_type = 'PRIMARY KEY'), false) AS pk,
-       COALESCE(bool_or(tc.constraint_type = 'FOREIGN KEY'), false) AS fk,
-       MAX(CASE WHEN tc.constraint_type = 'FOREIGN KEY'
-                THEN ccu.table_schema || '.' || ccu.table_name || '.' || ccu.column_name END) AS ref
+       EXISTS (SELECT 1 FROM pg_constraint p
+               WHERE p.contype = 'p' AND p.conrelid = cls.oid AND a.attnum = ANY (p.conkey)) AS pk,
+       fk.ref IS NOT NULL AS fk,
+       fk.ref
 FROM information_schema.columns c
 JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name
-LEFT JOIN information_schema.key_column_usage k
-  ON k.table_schema = c.table_schema AND k.table_name = c.table_name AND k.column_name = c.column_name
-LEFT JOIN information_schema.table_constraints tc
-  ON tc.constraint_schema = k.constraint_schema AND tc.constraint_name = k.constraint_name
-LEFT JOIN information_schema.constraint_column_usage ccu
-  ON tc.constraint_type = 'FOREIGN KEY' AND ccu.constraint_schema = tc.constraint_schema
- AND ccu.constraint_name = tc.constraint_name
+JOIN pg_namespace ns ON ns.nspname = c.table_schema
+JOIN pg_class cls ON cls.relnamespace = ns.oid AND cls.relname = c.table_name
+JOIN pg_attribute a ON a.attrelid = cls.oid AND a.attname = c.column_name
+LEFT JOIN LATERAL (
+  SELECT rn.nspname || '.' || rc.relname || '.' || ra.attname AS ref
+  FROM pg_constraint f
+  CROSS JOIN LATERAL unnest(f.conkey, f.confkey) AS u(src, dst)
+  JOIN pg_class rc ON rc.oid = f.confrelid
+  JOIN pg_namespace rn ON rn.oid = rc.relnamespace
+  JOIN pg_attribute ra ON ra.attrelid = f.confrelid AND ra.attnum = u.dst
+  WHERE f.contype = 'f' AND f.conrelid = cls.oid AND u.src = a.attnum
+  ORDER BY f.conname
+  LIMIT 1
+) fk ON true
 WHERE c.table_schema NOT IN ('pg_catalog', 'information_schema') AND c.table_schema NOT LIKE 'pg_toast%'
-GROUP BY c.table_schema, c.table_name, t.table_type, c.column_name, c.data_type, c.is_nullable, c.ordinal_position
 ORDER BY c.table_schema, c.table_name, c.ordinal_position"#
         }
         Engine::Mysql => {
