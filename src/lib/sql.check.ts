@@ -1,6 +1,6 @@
 // Quick check of the SQL helpers (table filters, table queries, saved query names): npm run check:sql
 import assert from "node:assert/strict";
-import { countSql, queryName, sqlLiteral, tableSql, whereSql, type Filter } from "./sql.ts";
+import { countSql, defaultSchema, queryName, sqlLiteral, tableSql, whereSql, type Filter } from "./sql.ts";
 
 const f = (column: string, op: Filter["op"], value = ""): Filter => ({ column, op, value });
 const pg = (...filters: Filter[]) => whereSql("postgres", filters);
@@ -68,6 +68,10 @@ assert.equal(
   countSql("mysql", { schema: "shop", name: "orders" }, { filters: [f("status", "eq", "paid")], sort: { column: "id", dir: "asc" }, page: 3 }),
   "SELECT count(*) FROM `shop`.`orders` WHERE `status` = 'paid';",
 );
+
+// The schema listed first: public on PostgreSQL, the connection's database on MySQL.
+assert.equal(defaultSchema({ engine: "postgres", database: "shop" }), "public");
+assert.equal(defaultSchema({ engine: "mysql", database: "shop" }), "shop");
 
 // Names offered when saving a query.
 assert.equal(queryName("-- Top customers by revenue\nSELECT 1"), "Top customers by revenue");

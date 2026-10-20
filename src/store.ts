@@ -1,6 +1,15 @@
 import { create } from "zustand";
 import { api } from "./api";
-import { countSql, isWrite, queryName, splitStatements, tableSql, type TableRef, type TableView } from "./lib/sql";
+import {
+  countSql,
+  defaultSchema,
+  isWrite,
+  queryName,
+  splitStatements,
+  tableSql,
+  type TableRef,
+  type TableView,
+} from "./lib/sql";
 import { showToast } from "./lib/toast";
 import type {
   AppError,
@@ -158,10 +167,6 @@ function queryDoc(docs: DocTab[], sql = ""): DocTab {
 
 const byName = (a: SavedQuery, b: SavedQuery) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
 
-/** The schema a connection works in by default; its tables are shown without a schema prefix. */
-function defaultSchema(profile: ConnectionProfile): string {
-  return profile.engine === "postgres" ? "public" : profile.database;
-}
 
 function patchDoc(conns: ConnTab[], connId: string, docId: string, patch: Partial<DocTab>): ConnTab[] {
   return conns.map((c) =>

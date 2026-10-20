@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { defaultSchema } from "../lib/sql";
 import { useApp, type ConnTab } from "../store";
 import type { TableInfo } from "../types";
 import { AppearanceSwitch } from "./AppearanceSwitch";
@@ -66,7 +67,8 @@ export function Sidebar({ conn }: { conn: ConnTab }) {
     }
   };
 
-  // Tables grouped by schema, schemas in the order the server listed them (alphabetical).
+  // Tables grouped by schema: the default one first (public on PostgreSQL), then the others in the
+  // order the server listed them (alphabetical).
   const groups = useMemo(() => {
     const f = filter.trim().toLowerCase();
     const map = new Map<string, TableInfo[]>();
@@ -76,8 +78,9 @@ export function Sidebar({ conn }: { conn: ConnTab }) {
       if (list) list.push(t);
       else map.set(t.schema, [t]);
     }
-    return [...map.entries()];
-  }, [conn.schema, filter]);
+    const first = defaultSchema(conn.profile);
+    return [...map.entries()].sort(([a], [b]) => Number(b === first) - Number(a === first));
+  }, [conn.schema, conn.profile, filter]);
 
   return (
     <aside className="sidebar">

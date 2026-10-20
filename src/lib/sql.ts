@@ -84,6 +84,14 @@ export function quoteIdent(engine: Engine, name: string): string {
   return engine === "mysql" ? "`" + name.replace(/`/g, "``") + "`" : '"' + name.replace(/"/g, '""') + '"';
 }
 
+/**
+ * The schema a connection works in by default: `public` on PostgreSQL, the connection's database on
+ * MySQL. The sidebar lists it first, and its tables are shown without a schema prefix.
+ */
+export function defaultSchema(profile: Pick<ConnectionProfile, "engine" | "database">): string {
+  return profile.engine === "postgres" ? "public" : profile.database;
+}
+
 /** Rows in one page of a table tab. */
 export const TABLE_ROWS = 200;
 

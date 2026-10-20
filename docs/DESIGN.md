@@ -26,7 +26,7 @@ changes stay consistent. All colors, sizes and radii live in
 ```
 Window
 └── ConnectionTab[]        top bar, one per open connection
-    ├── sidebar            Tables (schema tree, grouped by schema) | Saved | History, with a filter
+    ├── sidebar            Tables (grouped by schema, the default one first) | Saved | History, with a filter
     ├── tunnel status
     └── DocumentTab[]      inner bar, per connection
         ├── Query          SQL editor and its results
