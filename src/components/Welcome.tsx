@@ -15,6 +15,7 @@ function describe(p: ReturnType<typeof useApp.getState>["profiles"][number]) {
 
 export function Welcome() {
   const { profiles, openConnection, setSheet, connecting, connectError, conns, setShowWelcome, deleteProfile } = useApp();
+  const { startupProblems, dismissStartupProblems } = useApp();
   const [armedDelete, setArmedDelete] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
@@ -61,6 +62,16 @@ export function Welcome() {
           </label>
         </div>
 
+        {startupProblems.length > 0 && (
+          <div className="banner warning" role="alert">
+            {startupProblems.map((p) => (
+              <div key={p}>{p}</div>
+            ))}
+            <button className="btn small" onClick={dismissStartupProblems}>
+              OK
+            </button>
+          </div>
+        )}
         {connectError && (
           <div className="banner error">
             <b>Couldn’t connect.</b> {connectError.message}

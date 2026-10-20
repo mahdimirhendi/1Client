@@ -23,6 +23,7 @@ export default function App() {
   useEffect(() => {
     loadProfiles();
     useApp.getState().loadEnvironments();
+    useApp.getState().loadStartupProblems();
   }, [loadProfiles]);
 
   // Connections handed over by other apps (oneclient://open?url=…, postgresql://…).

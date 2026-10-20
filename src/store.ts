@@ -105,8 +105,12 @@ interface State {
   /** Connections opened from links, not saved. Keyed by profile id. */
   temporary: Record<string, ConnectionProfile>;
   saveSheet: SaveSheet | null;
+  /** Saved data that could not be read at launch; shown in the welcome window until dismissed. */
+  startupProblems: string[];
 
   loadProfiles(): Promise<void>;
+  loadStartupProblems(): Promise<void>;
+  dismissStartupProblems(): void;
   loadEnvironments(): Promise<void>;
   saveEnvironments(list: EnvironmentDef[]): Promise<void>;
   setEnvSheet(open: boolean): void;
@@ -190,11 +194,21 @@ export const useApp = create<State>((set, get) => ({
   pendingWrite: null,
   temporary: {},
   saveSheet: null,
+  startupProblems: [],
   environments: [],
   envSheet: false,
 
   async loadProfiles() {
     set({ profiles: await api.listConnections() });
+  },
+
+  async loadStartupProblems() {
+    const startupProblems = await api.takeStartupProblems().catch(() => []);
+    if (startupProblems.length) set({ startupProblems });
+  },
+
+  dismissStartupProblems() {
+    set({ startupProblems: [] });
   },
 
   async loadEnvironments() {

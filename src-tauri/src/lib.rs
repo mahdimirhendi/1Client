@@ -34,6 +34,8 @@ struct AppState {
     pending: std::sync::Mutex<Vec<LinkEvent>>,
     /// Last link and when, so one link delivered twice at launch opens once.
     last_link: std::sync::Mutex<Option<(String, Instant)>>,
+    /// Saved data that could not be read at launch (kept aside), told once in the welcome window.
+    startup_problems: std::sync::Mutex<Vec<String>>,
 }
 
 /// What the window gets for each received link. Never contains the password.
@@ -102,6 +104,12 @@ async fn save_temp_connection(state: State<'_, AppState>, id: Uuid) -> CmdResult
     state.secrets.save(&profile, &input)?;
     state.store.lock().await.upsert(profile.clone())?;
     Ok(profile)
+}
+
+/// What could not be loaded at launch, once.
+#[tauri::command]
+fn take_startup_problems(state: State<'_, AppState>) -> Vec<String> {
+    std::mem::take(&mut *state.startup_problems.lock().unwrap())
 }
 
 // ---------- Environments ----------
@@ -423,6 +431,11 @@ pub fn run() {
             let environments = EnvironmentStore::open(&dir)?;
             let queries = QueryStore::open(&dir)?;
             let diagrams = DiagramStore::open(&dir)?;
+            let startup_problems = [store.problem(), secrets.problem(), environments.problem()]
+                .into_iter()
+                .flatten()
+                .map(String::from)
+                .collect();
             app.manage(AppState {
                 store: Mutex::new(store),
                 environments: Mutex::new(environments),
@@ -433,6 +446,7 @@ pub fn run() {
                 temp: Default::default(),
                 pending: Default::default(),
                 last_link: Default::default(),
+                startup_problems: std::sync::Mutex::new(startup_problems),
             });
 
             use tauri_plugin_deep_link::DeepLinkExt;
@@ -463,6 +477,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             take_pending_links,
+            take_startup_problems,
             list_environments,
             save_environments,
             save_temp_connection,

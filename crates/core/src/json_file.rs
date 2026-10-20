@@ -20,19 +20,26 @@ pub(crate) fn read<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
     }
 }
 
-/// Like `read`, but a file that can't be parsed is moved aside (`*.json.invalid`) and reads as
-/// missing, so the app still starts and the next save doesn't overwrite what might be recovered
-/// from it. For files that are a convenience (history, saved queries, canvases), not for the
-/// connections themselves.
+/// Like `read`, but a file that can't be parsed is moved aside (see `set_aside`) and reads as
+/// missing, so the app still starts.
 pub(crate) fn read_or_set_aside<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
     match read(path) {
         Err(Error::Config(why)) => {
-            tracing::warn!("{why}; moving it aside");
-            std::fs::rename(path, path.with_extension("json.invalid"))?;
+            set_aside(path, &why)?;
             Ok(None)
         }
         other => other,
     }
+}
+
+/// Move a damaged file to `*.json.invalid` (or `*.invalid`), where it is kept for recovery and
+/// the next save can't overwrite it. Returns where it went.
+pub(crate) fn set_aside(path: &Path, why: &str) -> Result<std::path::PathBuf> {
+    tracing::warn!("{why}; moving it aside");
+    let ext = path.extension().map(|e| format!("{}.invalid", e.to_string_lossy())).unwrap_or_else(|| "invalid".into());
+    let to = path.with_extension(ext);
+    std::fs::rename(path, &to)?;
+    Ok(to)
 }
 
 /// Replace the file: write a temporary file next to it, then rename it over, so a crash never

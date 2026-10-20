@@ -91,6 +91,7 @@ input, textarea, .cm-content, .grid-cell, pre { user-select: text; -webkit-user-
 
 .banner { margin: 0 18px 8px; padding: 8px 12px; border-radius: 8px; font-size: var(--text-sm); }
 .banner.error { background: var(--error-bg); color: var(--error-text); }
+.banner.warning { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; background: var(--warning-bg); color: var(--warning-text); line-height: 1.4; user-select: text; -webkit-user-select: text; }
 
 /* ---------- Welcome ---------- */
 .welcome { display: flex; height: 100%; }

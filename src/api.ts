@@ -48,6 +48,8 @@ export const api = {
   /** One saved password, only when the user asks to see it. */
   revealSecret: (profileId: string, field: SecretField) => call<string | null>("reveal_secret", { profileId, field }),
   closeSession: (sessionId: string) => call<void>("close_session", { sessionId }),
+  /** Saved data that could not be read at launch (it was kept aside), to tell the user once. */
+  takeStartupProblems: () => call<string[]>("take_startup_problems"),
   takePendingLinks: () => call<{ profile: ConnectionProfile | null; error: string | null }[]>("take_pending_links"),
   saveTempConnection: (id: string) => call<ConnectionProfile>("save_temp_connection", { id }),
   /** `record` keeps the run in the connection's history (query tabs). */

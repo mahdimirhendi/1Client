@@ -20,7 +20,7 @@ use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use data_encoding::BASE64;
 use uuid::Uuid;
 
-use crate::{ConnectionProfile, Error, Result, SecretsInput, SshAuth};
+use crate::{json_file, ConnectionProfile, Error, Result, SecretsInput, SshAuth};
 
 #[derive(Debug, Clone, Default)]
 pub struct HopSecret {
@@ -66,6 +66,11 @@ pub struct SecretStore {
 impl SecretStore {
     pub fn open(dir: &Path) -> Result<Self> {
         Ok(Self { vault: AppVault::open(dir)? })
+    }
+
+    /// Why the saved passwords were not loaded, when the vault could not be opened.
+    pub fn problem(&self) -> Option<&str> {
+        self.vault.problem.as_deref()
     }
 
     /// Saved values as stored: 1Password references are not resolved yet.
@@ -196,6 +201,7 @@ struct AppVault {
     file: PathBuf,
     cipher: ChaCha20Poly1305,
     items: Mutex<BTreeMap<String, String>>,
+    problem: Option<String>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -206,39 +212,56 @@ struct VaultFile {
 }
 
 impl AppVault {
+    /// Open the vault, or start an empty one. A vault that can't be read (a damaged file, or a key
+    /// that doesn't open it) is kept aside for recovery instead of stopping the app; `problem` says so.
     fn open(dir: &Path) -> Result<Self> {
         std::fs::create_dir_all(dir)?;
         let key_path = dir.join("vault.key");
+        let file = dir.join("vault.json");
+        let mut kept = None;
         let key_bytes = match std::fs::read(&key_path) {
-            Ok(k) if k.len() == 32 => k,
-            Ok(_) => return Err(Error::Secret(format!("{} is damaged", key_path.display()))),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Ok(k) if k.len() == 32 => Some(k),
+            Ok(_) => {
+                // Without its key the vault can't be read either: keep both.
+                json_file::set_aside(&key_path, &format!("{} is damaged", key_path.display()))?;
+                if file.exists() {
+                    kept = Some(json_file::set_aside(&file, "its key is damaged")?);
+                }
+                None
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e.into()),
+        };
+        let key_bytes = match key_bytes {
+            Some(k) => k,
+            None => {
                 let mut k = vec![0u8; 32];
                 getrandom::fill(&mut k).map_err(|e| Error::Secret(e.to_string()))?;
                 write_private(&key_path, &k)?;
                 k
             }
-            Err(e) => return Err(e.into()),
         };
         let key = Key::try_from(&key_bytes[..]).map_err(|_| Error::Secret("bad vault key".into()))?;
         let cipher = ChaCha20Poly1305::new(&key);
-        let file = dir.join("vault.json");
 
         let items = match std::fs::read(&file) {
-            Ok(bytes) => {
-                let f: VaultFile = serde_json::from_slice(&bytes).map_err(|e| Error::Secret(e.to_string()))?;
-                let nonce_bytes = BASE64.decode(f.nonce.as_bytes()).map_err(|e| Error::Secret(e.to_string()))?;
-                let data = BASE64.decode(f.data.as_bytes()).map_err(|e| Error::Secret(e.to_string()))?;
-                let nonce = Nonce::try_from(&nonce_bytes[..]).map_err(|_| Error::Secret("bad vault nonce".into()))?;
-                let plain = cipher
-                    .decrypt(&nonce, data.as_ref())
-                    .map_err(|_| Error::Secret("the saved passwords could not be decrypted".into()))?;
-                serde_json::from_slice(&plain).map_err(|e| Error::Secret(e.to_string()))?
-            }
+            Ok(bytes) => match decrypt(&cipher, &bytes) {
+                Ok(items) => items,
+                Err(why) => {
+                    kept = Some(json_file::set_aside(&file, &why)?);
+                    BTreeMap::new()
+                }
+            },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
             Err(e) => return Err(e.into()),
         };
-        Ok(Self { file, cipher, items: Mutex::new(items) })
+        let problem = kept.map(|p| {
+            format!(
+                "Your saved passwords could not be read, so connections have none until you enter them again. The vault was kept as {}.",
+                p.display()
+            )
+        });
+        Ok(Self { file, cipher, items: Mutex::new(items), problem })
     }
 
     fn get(&self, account: &str) -> Option<String> {
@@ -296,6 +319,18 @@ impl AppVault {
     }
 }
 
+/// The items of a vault file, or why they can't be read.
+fn decrypt(cipher: &ChaCha20Poly1305, bytes: &[u8]) -> std::result::Result<BTreeMap<String, String>, String> {
+    let f: VaultFile = serde_json::from_slice(bytes).map_err(|e| format!("vault.json is not valid: {e}"))?;
+    let nonce_bytes = BASE64.decode(f.nonce.as_bytes()).map_err(|e| format!("vault.json nonce: {e}"))?;
+    let data = BASE64.decode(f.data.as_bytes()).map_err(|e| format!("vault.json data: {e}"))?;
+    let nonce = Nonce::try_from(&nonce_bytes[..]).map_err(|_| "vault.json has a bad nonce".to_string())?;
+    let plain = cipher
+        .decrypt(&nonce, data.as_ref())
+        .map_err(|_| "vault.json could not be decrypted with vault.key".to_string())?;
+    serde_json::from_slice(&plain).map_err(|e| format!("vault.json contents: {e}"))
+}
+
 /// Write a file readable only by the current user.
 fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
@@ -334,10 +369,13 @@ pub mod one_password {
             return Err(Error::Secret(format!("“{reference}” is not a 1Password reference (op://vault/item/field)")));
         }
         let op = op_binary().ok_or_else(|| Error::Secret(format!("1Password CLI not found. {HELP}")))?;
-        let out = tokio::process::Command::new(op)
-            .args(["read", "--no-newline", reference])
-            .output()
+        // Long enough to unlock 1Password or approve with Touch ID; a CLI that never answers
+        // must not leave the connection hanging.
+        let run =
+            tokio::process::Command::new(op).args(["read", "--no-newline", reference]).kill_on_drop(true).output();
+        let out = tokio::time::timeout(std::time::Duration::from_secs(120), run)
             .await
+            .map_err(|_| Error::Secret("1Password did not answer within 2 minutes. Unlock it and try again.".into()))?
             .map_err(|e| Error::Secret(format!("1Password CLI failed to start: {e}")))?;
         if out.status.success() {
             Ok(String::from_utf8_lossy(&out.stdout).into_owned())
@@ -365,6 +403,35 @@ mod tests {
         let again = AppVault::open(&dir).unwrap();
         assert_eq!(again.get("a").as_deref(), Some("s3cret"));
         assert_eq!(again.get("b"), None);
+        assert_eq!(again.problem, None);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_vault_that_cannot_be_read_is_kept_aside() {
+        let dir = std::env::temp_dir().join(format!("oneclient-vault-{}", Uuid::new_v4()));
+        let v = AppVault::open(&dir).unwrap();
+        v.put_many(&[("a".into(), &Some("s3cret".into()))]).unwrap();
+
+        // Another key (vault.key replaced): the vault is kept, a new one starts.
+        std::fs::write(dir.join("vault.key"), [7u8; 32]).unwrap();
+        let other = AppVault::open(&dir).unwrap();
+        assert_eq!(other.get("a"), None);
+        assert!(other.problem.as_deref().unwrap().contains("vault.json.invalid"));
+        assert!(dir.join("vault.json.invalid").exists());
+        other.put_many(&[("b".into(), &Some("x".into()))]).unwrap();
+        assert_eq!(AppVault::open(&dir).unwrap().get("b").as_deref(), Some("x"));
+
+        // A damaged key: key and vault are both kept.
+        std::fs::remove_file(dir.join("vault.json.invalid")).unwrap();
+        std::fs::write(dir.join("vault.key"), b"short").unwrap();
+        let fresh = AppVault::open(&dir).unwrap();
+        assert!(
+            fresh.problem.is_some()
+                && dir.join("vault.key.invalid").exists()
+                && dir.join("vault.json.invalid").exists()
+        );
+        assert_eq!(std::fs::read(dir.join("vault.key")).unwrap().len(), 32);
         std::fs::remove_dir_all(dir).ok();
     }
 

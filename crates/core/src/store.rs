@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
-use crate::{json_file, ConnectionProfile, Result};
+use crate::{json_file, ConnectionProfile, Error, Result};
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 struct FileFormat {
@@ -17,14 +17,32 @@ struct FileFormat {
 pub struct ConnectionStore {
     path: PathBuf,
     profiles: Vec<ConnectionProfile>,
+    problem: Option<String>,
 }
 
 impl ConnectionStore {
     pub fn open(dir: &Path) -> Result<Self> {
         std::fs::create_dir_all(dir)?;
         let path = dir.join("connections.json");
-        let profiles = json_file::read::<FileFormat>(&path)?.map(|f| f.connections).unwrap_or_default();
-        Ok(Self { path, profiles })
+        // A damaged file is kept aside and the app starts without it, saying so (`problem`).
+        let (profiles, problem) = match json_file::read::<FileFormat>(&path) {
+            Ok(f) => (f.map(|f| f.connections).unwrap_or_default(), None),
+            Err(Error::Config(why)) => {
+                let kept = json_file::set_aside(&path, &why)?;
+                let problem = format!(
+                    "Your saved connections could not be read, so 1Client started without them. The file was kept as {}.",
+                    kept.display()
+                );
+                (Vec::new(), Some(problem))
+            }
+            Err(e) => return Err(e),
+        };
+        Ok(Self { path, profiles, problem })
+    }
+
+    /// Why the saved connections were not loaded, when their file was damaged.
+    pub fn problem(&self) -> Option<&str> {
+        self.problem.as_deref()
     }
 
     pub fn list(&self) -> &[ConnectionProfile] {
@@ -95,6 +113,19 @@ mod tests {
         .unwrap();
         let store = ConnectionStore::open(&dir).unwrap();
         assert_eq!(store.list()[0].name, "old");
+        assert_eq!(store.problem(), None);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_damaged_file_is_kept_aside_and_the_app_still_starts() {
+        let dir = std::env::temp_dir().join(format!("oneclient-store-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("connections.json"), "{\"version\":1,\"connec").unwrap();
+        let store = ConnectionStore::open(&dir).unwrap();
+        assert!(store.list().is_empty());
+        assert!(store.problem().unwrap().contains("connections.json.invalid"));
+        assert!(dir.join("connections.json.invalid").exists() && !dir.join("connections.json").exists());
         std::fs::remove_dir_all(dir).ok();
     }
 }

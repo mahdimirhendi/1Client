@@ -72,6 +72,9 @@ by a command-line tool.
   text alphabetically.
 - **Errors.** One `Error` type, serialised to the UI as `{ kind, message, … }`. Server errors keep every
   field (code, SQLSTATE, detail, hint, position); `unknownHostKey` carries the key for "Trust and Retry".
+- **Saved data.** Every file in the app's data folder is replaced atomically (written next to it, then
+  renamed over it). A file that can't be read at launch is kept as `*.invalid` for recovery and the app
+  starts without it; for connections, environments and the password vault the welcome window says so.
 - **History and saved queries.** Both are kept per connection in the app's data folder and removed
   with the connection. A run from a query tab is recorded by the backend after it finishes, with its
   time, duration, rows or error; table browsing is not recorded, nor are connections opened from a

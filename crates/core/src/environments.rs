@@ -7,16 +7,33 @@ use crate::{default_environments, json_file, EnvironmentDef, Error, Result};
 pub struct EnvironmentStore {
     path: PathBuf,
     list: Vec<EnvironmentDef>,
+    problem: Option<String>,
 }
 
 impl EnvironmentStore {
     pub fn open(dir: &Path) -> Result<Self> {
         std::fs::create_dir_all(dir)?;
         let path = dir.join("environments.json");
-        let list: Vec<EnvironmentDef> = json_file::read(&path)?.unwrap_or_default();
+        let (list, problem) = match json_file::read::<Vec<EnvironmentDef>>(&path) {
+            Ok(list) => (list.unwrap_or_default(), None),
+            Err(Error::Config(why)) => {
+                let kept = json_file::set_aside(&path, &why)?;
+                let problem = format!(
+                    "Your environments could not be read, so the default ones are used. The file was kept as {}.",
+                    kept.display()
+                );
+                (Vec::new(), Some(problem))
+            }
+            Err(e) => return Err(e),
+        };
         // The app always needs at least one environment (see `fallback_id`).
         let list = if list.is_empty() { default_environments() } else { list };
-        Ok(Self { path, list })
+        Ok(Self { path, list, problem })
+    }
+
+    /// Why the saved environments were not loaded, when their file was damaged.
+    pub fn problem(&self) -> Option<&str> {
+        self.problem.as_deref()
     }
 
     pub fn list(&self) -> &[EnvironmentDef] {

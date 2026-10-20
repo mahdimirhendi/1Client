@@ -460,6 +460,7 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
       environments = args.list as typeof environments;
       return environments as T;
     case "take_pending_links":
+    case "take_startup_problems":
       return [] as T;
     case "introspect":
       return structuredClone(tables.map((t) => t.info)) as T;
