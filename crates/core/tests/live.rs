@@ -208,6 +208,15 @@ async fn mysql_through_two_hop_bastion() {
     assert_eq!(out.sets[0].rows[0][0].as_deref(), Some(d.db.as_str()));
 }
 
+/// Trust an SSH server's key like "Trust and Retry" does, so a test doesn't depend on known_hosts.
+async fn trust_host(hop: &SshHop, d: &Db) {
+    let net = Network { mode: NetworkMode::SshTunnel, hops: vec![hop.clone()] };
+    let r = Session::test(profile(Engine::Postgres, d, SslMode::Prefer, net), &ProfileSecrets::default()).await;
+    if let Some(Error::UnknownHostKey { host, port, key, .. }) = r.error.as_ref().map(Error::root) {
+        tunnel::trust_host_key(host, *port, key).unwrap();
+    }
+}
+
 /// Each failure is reported at the right step, with earlier steps ok and later ones skipped.
 #[tokio::test]
 #[ignore]
@@ -252,6 +261,7 @@ async fn test_reports_the_failing_step() {
     if let (Ok(key), Some(h2)) =
         (std::env::var("ONECLIENT_TEST_SSH_KEY"), hop_env("ONECLIENT_TEST_SSH2", SshAuth::Password))
     {
+        trust_host(&h2, &d).await;
         let mut s = pw(&d.password);
         s.hops.insert(h2.id, HopSecret { password: Some("wrong".into()), key_passphrase: None });
         let net = Network { mode: NetworkMode::SshTunnel, hops: vec![h2.clone()] };
@@ -259,6 +269,7 @@ async fn test_reports_the_failing_step() {
         assert!(failed(&r).starts_with("Sign in as"));
 
         let h1 = hop_env("ONECLIENT_TEST_SSH", SshAuth::KeyFile { path: key }).unwrap();
+        trust_host(&h1, &d).await;
         let mut s = pw(&d.password);
         let pass = std::env::var("ONECLIENT_TEST_SSH_KEY_PASS").ok().filter(|p| !p.is_empty());
         s.hops.insert(h1.id, HopSecret { password: None, key_passphrase: pass });
