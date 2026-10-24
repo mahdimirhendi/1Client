@@ -96,9 +96,26 @@ connection is tagged with its environment so you always know where you are.
 
 ### Download
 
-Download the latest `.dmg` from [Releases](https://github.com/mahdimirhendi/1Client/releases/latest),
-open it and drag **1Client** into **Applications**. It runs on Apple silicon and Intel Macs with
-macOS 12 or newer.
+1. Download the latest `1Client_<version>_universal.dmg` from
+   [Releases](https://github.com/mahdimirhendi/1Client/releases/latest). It runs on Apple silicon and
+   Intel Macs with macOS 12 or newer.
+2. Open it and drag **1Client** into **Applications**.
+3. Open 1Client from Applications. It isn't signed with an Apple Developer ID yet, so the first time
+   macOS stops it. Allow it once:
+   - **macOS 15 Sequoia and newer:** in the message, click **Done**. Open **System Settings** →
+     **Privacy & Security**, scroll down to *Security*, click **Open Anyway** next to "1Client was
+     blocked", and confirm with your password or Touch ID.
+   - **macOS 12 to 14:** Control-click (or right-click) 1Client in Applications, choose **Open**, then
+     click **Open** in the message.
+
+   From then on it opens normally.
+
+If macOS says *"1Client" is damaged and can't be opened*, the app is fine: macOS says this about
+downloaded apps it can't verify. Clear the download flag in Terminal, then open it again:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/1Client.app
+```
 
 ### Build from source
 

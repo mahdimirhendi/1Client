@@ -95,6 +95,10 @@ jobs:
           {
             echo "Download **1Client_${VERSION}_universal.dmg** below, open it and drag **1Client** into **Applications**."
             echo "It runs on Apple silicon and Intel Macs with macOS 12 or newer."
+            if [ "$NOTARIZE" != "true" ]; then
+              echo
+              echo "This build isn't notarized by Apple yet, so macOS asks you to allow it once: see [Install](https://github.com/$GITHUB_REPOSITORY#download)."
+            fi
             echo
             echo "## Changes"
             echo
