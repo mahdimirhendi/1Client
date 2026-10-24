@@ -33,13 +33,26 @@ import { useApp, type ConnTab, type DocTab } from "../store";
 import type { TableInfo } from "../types";
 
 type RunMode = "statement" | "all";
-type Command = "find" | "format" | "comment";
+type Command = "find" | "format" | "comment" | "focus";
 
 /** The focused editor registers here so the toolbar and the menu bar can drive it. */
 let activeRunner: ((mode: RunMode) => void) | null = null;
 let activeCommand: ((cmd: Command) => void) | null = null;
 export const runActive = (mode: RunMode) => activeRunner?.(mode);
 export const editorCommand = (cmd: Command) => activeCommand?.(cmd);
+
+/** ⌘L: put the cursor in the SQL editor of the shown tab, opening the editor (or a query tab) first. */
+export function focusEditor(connId: string) {
+  const st = useApp.getState();
+  const conn = st.conns.find((c) => c.id === connId);
+  if (!conn) return;
+  st.setView(connId, "query");
+  const doc = conn.docs.find((d) => d.id === conn.activeDoc);
+  if (!doc) st.newQuery(connId);
+  else if (!doc.showEditor) st.toggleEditor(connId, doc.id);
+  // An editor that was just opened registers itself when it mounts.
+  setTimeout(() => editorCommand("focus"));
+}
 
 /** Cursor and selection of the focused editor, for the toolbar and the status line. */
 export const useEditorStatus = create<{ line: number; col: number; selected: number; statements: number }>(() => ({
@@ -212,7 +225,7 @@ export function QueryEditor({ conn, doc }: { conn: ConnTab; doc: DocTab }) {
       if (!v) return;
       if (cmd === "find") openSearchPanel(v);
       else if (cmd === "comment") toggleComment(v);
-      else formatIn(v, conn.profile.engine);
+      else if (cmd === "format") formatIn(v, conn.profile.engine);
       v.focus();
     };
     const register = () => {

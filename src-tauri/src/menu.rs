@@ -51,6 +51,8 @@ pub fn build(app: &AppHandle) -> tauri::Result<(Menu<Wry>, AppearanceItems)> {
         .build()?;
 
     let query = SubmenuBuilder::new(app, "Query")
+        .item(&item("focus-editor", "Go to SQL Editor", Some("CmdOrCtrl+L"))?)
+        .separator()
         .item(&item("run-statement", "Run Statement", Some("CmdOrCtrl+Enter"))?)
         .item(&item("run-all", "Run All", Some("CmdOrCtrl+Shift+Enter"))?)
         .separator()

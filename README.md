@@ -43,6 +43,8 @@ connection is tagged with its environment so you always know where you are.
 - Syntax highlighting, find and replace, Format SQL, toggle comment and multiple cursors.
 - Next-word suggestions that know your tables, columns and foreign keys
   (`JOIN customers c` → `ON o.customer_id = c.id`); Tab accepts.
+- [Snippets](#snippets): type `sf` and press Tab for `SELECT * FROM`. ⌘L puts the cursor in the editor
+  from anywhere.
 - Run the statement under the cursor (⌘↵), the selection, or everything (⇧⌘↵), or use ▶ in the gutter.
 - **Saved queries and history** in the sidebar, per connection: save a query with ⌘S, and double-click
   a saved query or anything you ran before to run it again. Search both with the filter box.
@@ -130,6 +132,7 @@ npm run app        # builds 1Client.app and copies it to /Applications
 | ⌘1 … ⌘8, ⌘9 | Show tab 1 to 8, or the last tab |
 | ⇧⌘] / ⇧⌘[ (or ⌃Tab / ⌃⇧Tab) | Next / previous tab |
 | ⌘↵ / ⇧⌘↵ | Run statement or selection / run everything |
+| ⌘L | Put the cursor in the SQL editor (opens it, or a query tab, when needed) |
 | ⌘E | Show or hide the SQL editor |
 | ⌘R | Run the tab's query again (refresh); in the diagram, read the tables again |
 | ⇧⌘D | Switch between the query tabs and the diagram |
@@ -141,6 +144,25 @@ npm run app        # builds 1Client.app and copies it to /Applications
 | ⌘⌫ | Set the selected cell to `NULL` |
 | ⌘S | Save the query (in the editor) or the edited cells (in the grid) |
 | ⌘C | Copy the selected cell |
+
+## Snippets
+
+Type a snippet's name at the start of a statement and press Tab. Its placeholders are selected one
+after another: type over each one, then press Tab for the next. Snippets also appear in the
+suggestion list as you type.
+
+| Name | Expands to |
+|---|---|
+| `sf` | `SELECT * FROM table` |
+| `sfw` | `SELECT * FROM table WHERE condition` |
+| `sc` | `SELECT count(*) FROM table` |
+| `scg` | `SELECT column, count(*) FROM table GROUP BY column ORDER BY count(*) DESC` |
+| `sd` | `SELECT DISTINCT column FROM table` |
+| `ii` | `INSERT INTO table (columns) VALUES (values)` |
+| `us` | `UPDATE table SET column = value WHERE condition` |
+| `df` | `DELETE FROM table WHERE condition` |
+| `cte` | `WITH name AS (query) SELECT * FROM name` |
+| `lj` | `LEFT JOIN table ON condition`, inside a statement |
 
 ## Open a database from another app
 

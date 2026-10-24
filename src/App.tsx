@@ -12,7 +12,7 @@ import { Welcome } from "./components/Welcome";
 import { Workspace } from "./components/Workspace";
 import { onLinksPending, onMenu, onReconnected } from "./api";
 import { showToast } from "./lib/toast";
-import { editorCommand, runActive } from "./components/QueryEditor";
+import { editorCommand, focusEditor, runActive } from "./components/QueryEditor";
 import { useResultsView } from "./components/Results";
 import { useAppearance, type Appearance } from "./lib/theme";
 import { useApp } from "./store";
@@ -54,6 +54,7 @@ export default function App() {
       const c = st.conns.find((x) => x.id === st.activeConn);
       const d = c?.docs.find((x) => x.id === c.activeDoc);
       if (id.startsWith("appearance:")) return useAppearance.getState().set(id.slice(11) as Appearance);
+      if (id === "focus-editor") return c && focusEditor(c.id);
       if (c && c.view === "diagram") {
         // The diagram has no query tabs on screen: tab and editor commands wait for the query view.
         switch (id) {
@@ -136,6 +137,10 @@ export default function App() {
         e.preventDefault();
         st.setView(conn.id, diagram ? "query" : "diagram");
         return;
+      }
+      if (conn && k === "l" && !e.shiftKey) {
+        e.preventDefault();
+        return focusEditor(conn.id);
       }
       if (diagram) {
         const zoom = e.key === "=" || e.key === "+" ? "zoom-in" : e.key === "-" ? "zoom-out" : e.key === "0" ? "zoom-fit" : null;

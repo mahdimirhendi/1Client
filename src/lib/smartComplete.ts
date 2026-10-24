@@ -7,10 +7,11 @@ import { Prec, StateEffect, StateField, type EditorState, type Extension } from 
 import { Decoration, EditorView, keymap, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import type { TableInfo } from "../types";
 import { predict, type Prediction, type Suggestion } from "./predict";
+import { expandSnippet, snippetOptions } from "./snippets";
 import { splitStatements } from "./sql";
 
-/** Statement around the cursor: text before it, and the whole statement. */
-function predictionAt(state: EditorState, schema: TableInfo[]): Prediction {
+/** Statement around the cursor: the text before it, and the whole statement. */
+function statementAt(state: EditorState): { before: string; whole: string } {
   const text = state.doc.toString();
   const pos = state.selection.main.head;
   let start = 0;
@@ -22,8 +23,16 @@ function predictionAt(state: EditorState, schema: TableInfo[]): Prediction {
       break;
     }
   }
-  return predict(text.slice(start, pos), text.slice(start, end), schema);
+  return { before: text.slice(start, pos), whole: text.slice(start, end) };
 }
+
+function predictionAt(state: EditorState, schema: TableInfo[]): Prediction {
+  const { before, whole } = statementAt(state);
+  return predict(before, whole, schema);
+}
+
+/** Only the word being typed precedes the cursor in its statement: a statement snippet fits. */
+const atStatementStart = (state: EditorState) => !statementAt(state).before.replace(/\w+$/, "").trim();
 
 /** Keywords and table names get a trailing space so the next guess can follow. */
 function insertText(s: Suggestion): string {
@@ -108,6 +117,8 @@ export function smartComplete(getSchema: () => TableInfo[]): Extension {
 
   const acceptGhost = (view: EditorView): boolean => {
     if (completionStatus(view.state) === "active") return acceptCompletion(view);
+    // Typed faster than the popup opens: a snippet's name still expands.
+    if (expandSnippet(view, atStatementStart(view.state))) return true;
     const g = view.state.field(ghostField);
     if (!g) return false;
     const pos = view.state.selection.main.head;
@@ -148,6 +159,7 @@ export function smartSource(getSchema: () => TableInfo[], dialect: () => SQLDial
       boost: 99 - Math.min(i, 99),
     }));
     if (pr.prefix && !pr.prefix.includes(".")) {
+      options.push(...snippetOptions(atStatementStart(ctx.state)));
       const kw = await keywordCompletionSource(dialect(), true)(ctx);
       if (kw && kw.from === from) {
         const have = new Set(options.map((o) => o.label.toLowerCase()));
