@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { FILTER_OPS, needsValue, whereSql, type Filter, type FilterOp, type TableView } from "../lib/sql";
 import { useApp, type ConnTab, type DocTab } from "../store";
 import { IconClose, IconPlus } from "./Icons";
+import { exact } from "../lib/input";
 
 type Match = NonNullable<TableView["match"]>;
 
@@ -107,9 +108,9 @@ export function FilterBar({ conn, doc }: { conn: ConnTab; doc: DocTab }) {
           <div className="filter-row">
             <span className="filter-label mono">WHERE</span>
             <input
+              {...exact}
               className="fill-field mono filter-where"
               aria-label="Condition in SQL"
-              spellCheck={false}
               autoFocus
               placeholder={conn.profile.engine === "postgres" ? "created_at > now() - interval '7 days'" : "created_at > now() - interval 7 day"}
               value={where}
@@ -140,9 +141,9 @@ export function FilterBar({ conn, doc }: { conn: ConnTab; doc: DocTab }) {
                 ))}
               </select>
               <input
+                {...exact}
                 className="fill-field mono filter-value"
                 aria-label="Value"
-                spellCheck={false}
                 disabled={!needsValue(r.op)}
                 placeholder={needsValue(r.op) ? placeholder(r.op) : ""}
                 value={needsValue(r.op) ? r.value : ""}

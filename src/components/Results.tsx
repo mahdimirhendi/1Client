@@ -9,6 +9,7 @@ import { showToast } from "../lib/toast";
 import { useApp, type ConnTab, type DocTab } from "../store";
 import type { AppError, ResultSet } from "../types";
 import { openMenu } from "./ContextMenu";
+import { exact } from "../lib/input";
 
 type View = "table" | "json";
 const VIEW_KEY = "oneclient.resultsView";
@@ -487,9 +488,9 @@ function Grid({ conn, doc, set, setIdx }: { conn: ConnTab; doc: DocTab; set: Res
                         {isEditing ? (
                           <>
                             <input
+                              {...exact}
                               className="cell-input"
                               autoFocus
-                              spellCheck={false}
                               placeholder={editing.isNull ? "NULL" : undefined}
                               value={editing.isNull ? "" : editing.draft}
                               onFocus={(e) => editing.draft.length > 1 && e.currentTarget.select()}

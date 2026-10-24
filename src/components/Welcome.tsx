@@ -6,6 +6,7 @@ import type { AppError } from "../types";
 import { AppIcon, EngineBadge, IconPlus, IconSearch } from "./Icons";
 import { EnvTag } from "./EnvTag";
 import { timeAgo } from "../lib/time";
+import { exact } from "../lib/input";
 
 function describe(p: ReturnType<typeof useApp.getState>["profiles"][number]) {
   const engine = p.engine === "postgres" ? "PostgreSQL" : "MySQL";
@@ -72,7 +73,7 @@ export function Welcome() {
           <div className="welcome-title">Connections</div>
           <label className="search-field" style={{ width: 220 }}>
             <IconSearch color="var(--label-secondary)" />
-            <input aria-label="Search connections" placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} />
+            <input {...exact} aria-label="Search connections" placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} />
           </label>
         </div>
 

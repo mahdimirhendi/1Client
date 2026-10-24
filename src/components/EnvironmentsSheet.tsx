@@ -3,6 +3,7 @@ import { ENV_PALETTE } from "../lib/theme";
 import { useApp } from "../store";
 import type { EnvironmentDef } from "../types";
 import { IconPlus } from "./Icons";
+import { exact } from "../lib/input";
 
 const ROW_H = 44;
 
@@ -126,6 +127,7 @@ export function EnvironmentsSheet() {
                   onClick={(ev) => openPicker(e.id, ev.currentTarget)}
                 />
                 <input
+                  {...exact}
                   className="envs-name"
                   aria-label="Environment name"
                   placeholder="Name"

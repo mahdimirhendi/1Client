@@ -4,6 +4,7 @@ import { displayName, indexSchema, inScope, parsePatterns } from "../lib/diagram
 import { defaultSchema } from "../lib/sql";
 import { useApp } from "../store";
 import type { CanvasScope } from "../types";
+import { exact } from "../lib/input";
 
 type Kind = CanvasScope["kind"];
 
@@ -97,6 +98,7 @@ export function CanvasSheet({ sheet }: { sheet: SheetState }) {
           <label className="field-row">
             <span>Name</span>
             <input
+              {...exact}
               className="fill-field grow"
               aria-label="Canvas name"
               autoFocus
@@ -124,6 +126,7 @@ export function CanvasSheet({ sheet }: { sheet: SheetState }) {
                   {kind === k && k === "pattern" && (
                     <span className="scope-extra">
                       <input
+                        {...exact}
                         className="fill-field mono"
                         aria-label="Table name pattern"
                         placeholder="billing_*"

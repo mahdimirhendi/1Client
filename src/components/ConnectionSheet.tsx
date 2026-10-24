@@ -16,6 +16,7 @@ import type {
 } from "../types";
 import { envColors, useDarkMode } from "../lib/theme";
 import { EngineBadge, IconCheck, IconEye, IconEyeOff, IconPlus } from "./Icons";
+import { exact } from "../lib/input";
 
 const uid = () => crypto.randomUUID();
 
@@ -78,9 +79,9 @@ function SecretInput({
   return (
     <span className={`secret-field ${width ? "" : "grow"}`} style={width ? { width } : undefined}>
       <input
+        {...exact}
         type={visible || isRef ? "text" : "password"}
         className={`${inputClass} ${isRef ? "mono" : ""}`}
-        spellCheck={false}
         autoComplete="off"
         title={title}
         placeholder={nothingSaved ? "Nothing saved" : reveal ? "Saved (type to change)" : placeholder}
@@ -237,6 +238,7 @@ export function ConnectionSheet() {
               Or paste a connection URL
             </label>
             <input
+              {...exact}
               id="conn-url"
               className="text-field mono"
               placeholder={p.engine === "postgres" ? "postgres://user@host:5432/database" : "mysql://user@host:3306/database"}
@@ -262,6 +264,7 @@ export function ConnectionSheet() {
             <EngineBadge engine={p.engine} size={40} />
             <div className="grow">
               <input
+                {...exact}
                 className="title-input"
                 aria-label="Connection name"
                 placeholder="Connection name"
@@ -285,9 +288,10 @@ export function ConnectionSheet() {
               <div className="col">
                 <Group title="Server">
                   <Row label="Host">
-                    <input className="row-input" value={p.host} onChange={(e) => update({ host: e.target.value })} />
+                    <input {...exact} className="row-input" value={p.host} onChange={(e) => update({ host: e.target.value })} />
                     <span className="muted">:</span>
                     <input
+                      {...exact}
                       className="row-input port"
                       aria-label="Port"
                       value={p.port}
@@ -295,7 +299,7 @@ export function ConnectionSheet() {
                     />
                   </Row>
                   <Row label="User">
-                    <input className="row-input" value={p.user} onChange={(e) => update({ user: e.target.value })} />
+                    <input {...exact} className="row-input" value={p.user} onChange={(e) => update({ user: e.target.value })} />
                   </Row>
                   <Row label="Password">
                     <SecretInput
@@ -308,6 +312,7 @@ export function ConnectionSheet() {
                   </Row>
                   <Row label="Database">
                     <input
+                      {...exact}
                       className="row-input"
                       placeholder={p.engine === "postgres" ? "postgres" : "optional"}
                       value={p.database}
@@ -435,15 +440,16 @@ export function ConnectionSheet() {
                       <div className="hop-grid">
                         <label>
                           <span>User</span>
-                          <input className="fill-field mono" value={h.user} onChange={(e) => setHop(h.id, { user: e.target.value })} />
+                          <input {...exact} className="fill-field mono" value={h.user} onChange={(e) => setHop(h.id, { user: e.target.value })} />
                         </label>
                         <label>
                           <span>Host</span>
-                          <input className="fill-field mono" value={h.host} onChange={(e) => setHop(h.id, { host: e.target.value })} />
+                          <input {...exact} className="fill-field mono" value={h.host} onChange={(e) => setHop(h.id, { host: e.target.value })} />
                         </label>
                         <label>
                           <span>Port</span>
                           <input
+                            {...exact}
                             className="fill-field mono"
                             value={h.port}
                             onChange={(e) => setHop(h.id, { port: Number(e.target.value.replace(/\D/g, "")) || 0 })}
@@ -469,6 +475,7 @@ export function ConnectionSheet() {
                         {h.auth.kind === "keyFile" && (
                           <>
                             <input
+                              {...exact}
                               className="fill-field mono grow"
                               value={h.auth.path}
                               onChange={(e) => setHop(h.id, { auth: { kind: "keyFile", path: e.target.value } })}
@@ -494,6 +501,7 @@ export function ConnectionSheet() {
                         )}
                         {h.auth.kind === "agent" && (
                           <input
+                            {...exact}
                             className="fill-field mono grow"
                             placeholder="Agent socket (default: SSH_AUTH_SOCK)"
                             value={h.auth.socket ?? ""}

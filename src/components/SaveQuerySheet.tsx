@@ -2,6 +2,7 @@ import { useState } from "react";
 import { showToast } from "../lib/toast";
 import { useApp, type SaveSheet } from "../store";
 import type { AppError } from "../types";
+import { exact } from "../lib/input";
 
 /** Name a query to keep it with its connection, or rename a saved one. */
 export function SaveQuerySheet({ sheet }: { sheet: SaveSheet }) {
@@ -37,6 +38,7 @@ export function SaveQuerySheet({ sheet }: { sheet: SaveSheet }) {
         </div>
         <p className="muted">Saved queries stay with this connection. Double-click one in the sidebar to run it.</p>
         <input
+          {...exact}
           className="text-field"
           aria-label="Name"
           placeholder="Name"

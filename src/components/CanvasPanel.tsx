@@ -2,6 +2,7 @@ import { memo, useMemo, useState } from "react";
 import { inScope, scopeLabel, shortType, shownTables, type Changes, type Schema } from "../lib/diagram";
 import type { Canvas } from "../types";
 import { IconCheck, IconSearch } from "./Icons";
+import { exact } from "../lib/input";
 
 interface PanelProps {
   canvas: Canvas;
@@ -64,6 +65,7 @@ export const CanvasPanel = memo(function CanvasPanel(p: PanelProps) {
       <label className="search-field panel-search">
         <IconSearch size={11} color="var(--label-secondary)" />
         <input
+          {...exact}
           ref={p.filterRef}
           aria-label="Filter tables"
           placeholder="Filter tables"

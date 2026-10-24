@@ -5,6 +5,7 @@ import type { TableInfo } from "../types";
 import { AppearanceSwitch } from "./AppearanceSwitch";
 import { IconChevron, IconSearch, IconTable } from "./Icons";
 import { HistoryList, SavedList } from "./QueryLists";
+import { exact } from "../lib/input";
 
 const COLLAPSED_KEY = "oneclient.collapsedSchemas.";
 const PANEL_KEY = "oneclient.sidebarPanel";
@@ -96,7 +97,7 @@ export function Sidebar({ conn }: { conn: ConnTab }) {
       <div className="sidebar-top">
         <label className="search-field">
           <IconSearch size={11} color="var(--label-secondary)" />
-          <input aria-label={FILTER_LABEL[panel]} placeholder="Filter" value={filter} onChange={(e) => setFilter(e.target.value)} />
+          <input {...exact} aria-label={FILTER_LABEL[panel]} placeholder="Filter" value={filter} onChange={(e) => setFilter(e.target.value)} />
         </label>
         {panel === "tables" && (
           <button className="btn tiny" title="Reload schema" onClick={() => refreshSchema(conn.id)}>
