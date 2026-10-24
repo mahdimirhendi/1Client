@@ -26,7 +26,14 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 pub struct Tunnel {
     pub local_port: u16,
     accept_task: JoinHandle<()>,
-    _sessions: Vec<Arc<Handle<HostKeyCheck>>>,
+    sessions: Vec<Arc<Handle<HostKeyCheck>>>,
+}
+
+impl Tunnel {
+    /// An SSH session of the chain has ended (keepalives went unanswered, or the server closed it).
+    pub fn is_closed(&self) -> bool {
+        self.sessions.iter().any(|s| s.is_closed())
+    }
 }
 
 impl Drop for Tunnel {
@@ -35,12 +42,15 @@ impl Drop for Tunnel {
     }
 }
 
-/// Verifies server keys against `~/.ssh/known_hosts` and remembers why a key was refused,
-/// so the UI can offer "Trust this host" instead of a generic error.
+/// Verifies server keys against `~/.ssh/known_hosts`. A server seen for the first time is
+/// trusted and added, like `ssh -o StrictHostKeyChecking=accept-new`; a refused key is kept so
+/// the UI can offer to replace it instead of showing a generic error.
 pub struct HostKeyCheck {
     host: String,
     port: u16,
     refusal: Arc<Mutex<Option<Error>>>,
+    /// Fingerprint of a new server's key that was added, for the step's report.
+    learned: Arc<Mutex<Option<String>>>,
 }
 
 impl client::Handler for HostKeyCheck {
@@ -57,28 +67,28 @@ impl client::Handler for HostKeyCheck {
         let fingerprint = key.fingerprint(HashAlg::Sha256).to_string();
         let refusal = match crate::known_hosts::check(&self.host, self.port, key) {
             HostKeyStatus::Trusted => return Ok(true),
-            HostKeyStatus::Changed { line } => {
-                Error::HostKeyChanged { host: self.host.clone(), port: self.port, line, fingerprint }
+            HostKeyStatus::Unknown => {
+                // Like ssh, connect even when the key can't be written down.
+                if let Err(e) = crate::known_hosts::learn(&self.host, self.port, key) {
+                    tracing::warn!("{e}");
+                }
+                *self.learned.lock().unwrap() = Some(fingerprint);
+                return Ok(true);
             }
-            HostKeyStatus::Revoked { line } => {
-                Error::ssh(&self.host, format!("this host key is marked @revoked in ~/.ssh/known_hosts line {line}"))
-            }
-            HostKeyStatus::Unknown => Error::UnknownHostKey {
+            HostKeyStatus::Changed { line } => Error::HostKeyChanged {
                 host: self.host.clone(),
                 port: self.port,
+                line,
                 fingerprint,
                 key: key.to_openssh().unwrap_or_default(),
             },
+            HostKeyStatus::Revoked { line } => {
+                Error::ssh(&self.host, format!("this host key is marked @revoked in ~/.ssh/known_hosts line {line}"))
+            }
         };
         *self.refusal.lock().unwrap() = Some(refusal);
         Ok(false)
     }
-}
-
-/// Add a host key to `~/.ssh/known_hosts` after the user confirmed it.
-pub fn trust_host_key(host: &str, port: u16, key_openssh: &str) -> Result<()> {
-    let key = keys::PublicKey::from_openssh(key_openssh).map_err(|e| Error::ssh(host, e))?;
-    keys::known_hosts::learn_known_hosts(host, port, &key).map_err(|e| Error::ssh(host, e))
 }
 
 fn ssh_config() -> Arc<client::Config> {
@@ -106,8 +116,9 @@ pub async fn open(
 
     for (i, (hop, secret)) in hops.iter().enumerate() {
         let host = hop.host.as_str();
-        let refusal = Arc::new(Mutex::new(None));
-        let handler = HostKeyCheck { host: hop.host.clone(), port: hop.port, refusal: refusal.clone() };
+        let (refusal, learned) = (Arc::new(Mutex::new(None)), Arc::new(Mutex::new(None)));
+        let handler =
+            HostKeyCheck { host: hop.host.clone(), port: hop.port, refusal: refusal.clone(), learned: learned.clone() };
 
         // 1. Reach the host: TCP for the first hop, a forwarded channel for later ones.
         let handle = match sessions.last() {
@@ -122,7 +133,7 @@ pub async fn open(
                     )
                     .await?;
                 tcp.set_nodelay(true).ok();
-                handshake(steps, hop, &refusal, client::connect_stream(config.clone(), tcp, handler)).await?
+                handshake(steps, hop, &refusal, &learned, client::connect_stream(config.clone(), tcp, handler)).await?
             }
             Some(prev) => {
                 let via = &hops[i - 1].0.host;
@@ -140,8 +151,8 @@ pub async fn open(
                         )),
                     )
                     .await?;
-                handshake(steps, hop, &refusal, client::connect_stream(config.clone(), channel.into_stream(), handler))
-                    .await?
+                let stream = client::connect_stream(config.clone(), channel.into_stream(), handler);
+                handshake(steps, hop, &refusal, &learned, stream).await?
             }
         };
 
@@ -200,7 +211,7 @@ pub async fn open(
         }
     });
 
-    Ok(Tunnel { local_port, accept_task, _sessions: sessions })
+    Ok(Tunnel { local_port, accept_task, sessions })
 }
 
 /// 2. SSH handshake, including the host key check.
@@ -208,27 +219,28 @@ async fn handshake(
     steps: &mut Steps,
     hop: &SshHop,
     refusal: &Arc<Mutex<Option<Error>>>,
+    learned: &Arc<Mutex<Option<String>>>,
     fut: impl std::future::Future<Output = Result<Handle<HostKeyCheck>, russh::Error>>,
 ) -> Result<Handle<HostKeyCheck>> {
     let host = hop.host.as_str();
-    steps
+    let handle = steps
         .run(
             label::host_key(host),
             timed(&format!("SSH handshake with {host}"), async {
                 fut.await.map_err(|e| refusal.lock().unwrap().take().unwrap_or_else(|| Error::ssh(host, format!("SSH handshake failed: {e}"))))
             }),
             |e| match e {
-                Error::UnknownHostKey { .. } => {
-                    Some("First connection to this server. Compare the fingerprint with your admin, then choose Trust and Retry.".into())
-                }
-                Error::HostKeyChanged { .. } => Some(format!(
-                    "If the server was rebuilt, remove the old line with `ssh-keygen -R '{}'` and try again. Otherwise don't connect.",
-                    crate::known_hosts::entry_name(host, hop.port)
-                )),
+                Error::HostKeyChanged { .. } => Some(
+                    "If the server was rebuilt or reinstalled, replace the old key. If you don't know why it changed, don't connect: someone may be intercepting the connection.".into(),
+                ),
                 _ => Some("The server is not speaking SSH on this port, or uses algorithms 1Client does not support.".into()),
             },
         )
-        .await
+        .await?;
+    if let Some(fingerprint) = learned.lock().unwrap().take() {
+        steps.note(format!("new server, key {fingerprint} added to ~/.ssh/known_hosts"));
+    }
+    Ok(handle)
 }
 
 async fn timed<T>(what: &str, fut: impl std::future::Future<Output = Result<T>>) -> Result<T> {

@@ -1,10 +1,9 @@
 import { AppearanceSwitch } from "./AppearanceSwitch";
 import { useMemo, useState } from "react";
-import { api } from "../api";
 import { useApp } from "../store";
-import type { AppError } from "../types";
 import { AppIcon, EngineBadge, IconPlus, IconSearch } from "./Icons";
 import { EnvTag } from "./EnvTag";
+import { ReplaceHostKey } from "./ReplaceHostKey";
 import { timeAgo } from "../lib/time";
 import { exact } from "../lib/input";
 
@@ -20,17 +19,6 @@ export function Welcome() {
   const { profiles, openConnection, setSheet, connecting, connectError, conns, setShowWelcome, deleteProfile } = useApp();
   const { startupProblems, dismissStartupProblems, failedProfile } = useApp();
 
-  /** A server seen for the first time: add its key to ~/.ssh/known_hosts and connect again. */
-  const trustAndRetry = async () => {
-    const e = connectError;
-    if (!e?.host || !e.port || !e.key || !failedProfile) return;
-    try {
-      await api.trustHostKey(e.host, e.port, e.key);
-    } catch (err) {
-      return useApp.setState({ connectError: err as AppError });
-    }
-    openConnection(failedProfile);
-  };
   const [armedDelete, setArmedDelete] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
@@ -91,10 +79,8 @@ export function Welcome() {
           <div className="banner error">
             <b>Couldn’t connect.</b> {connectError.message}
             {connectError.hint && <div className="banner-hint">{connectError.hint}</div>}
-            {connectError.kind === "unknownHostKey" && connectError.key && failedProfile && (
-              <button className="btn small banner-action" onClick={trustAndRetry} disabled={!!connecting}>
-                Trust and Retry
-              </button>
+            {failedProfile && !connecting && (
+              <ReplaceHostKey error={connectError} onReplaced={() => openConnection(failedProfile)} />
             )}
           </div>
         )}

@@ -1,6 +1,10 @@
-//! A live connection: optional tunnel plus a database connection.
+//! A live connection: optional tunnel plus a database connection. When it drops (the Mac slept,
+//! the network changed, the server restarted) it is opened again by itself.
 
-use std::time::{Duration, Instant};
+use std::future::Future;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime};
 
 use tokio::net::TcpStream;
 use uuid::Uuid;
@@ -12,14 +16,45 @@ use crate::tunnel::{self, Tunnel};
 use crate::{ConnectionProfile, DbStage, Engine, Error, QueryOutput, Result, SessionInfo, TableInfo};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// After this long without a statement, the connection is pinged before it is used: after sleep,
+/// connections often look open but are dead.
+const IDLE: Duration = Duration::from_secs(30);
+const PING_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub struct Session {
     pub id: Uuid,
     pub profile: ConnectionProfile,
-    pub server_version: String,
+    /// Kept to connect again.
+    secrets: ProfileSecrets,
+    live: Mutex<Arc<Live>>,
+    /// One reconnect at a time; statements that find the connection dead wait for it.
+    reconnecting: tokio::sync::Mutex<()>,
+    reconnected: AtomicBool,
+    /// Statements running now, and when the last one ended. Wall-clock time, because `Instant`
+    /// stands still while the Mac sleeps.
+    busy: AtomicUsize,
+    last_used: Mutex<SystemTime>,
+}
+
+/// One opened connection.
+struct Live {
+    server_version: String,
     db: DbConn,
     // Declared after `db` so the database connection closes before the tunnel.
     tunnel: Option<Tunnel>,
+    /// A statement found it dropped.
+    lost: AtomicBool,
+}
+
+impl Live {
+    fn is_closed(&self) -> bool {
+        self.lost.load(Ordering::SeqCst) || self.db.is_closed() || self.tunnel.as_ref().is_some_and(Tunnel::is_closed)
+    }
+
+    /// The server answers a ping in time (an error from the server is an answer too).
+    async fn answers(&self) -> bool {
+        matches!(tokio::time::timeout(PING_TIMEOUT, self.db.ping()).await, Ok(Ok(()) | Err(Error::Db(_))))
+    }
 }
 
 /// Result of "Test Connection": every step, with what failed and what to try.
@@ -31,23 +66,36 @@ pub struct TestReport {
     pub server_version: Option<String>,
     pub hops: usize,
     pub elapsed_ms: u64,
-    /// The failure, so the UI can offer actions like "Trust and Retry".
+    /// The failure, so the UI can offer actions like replacing a changed host key.
     pub error: Option<Error>,
 }
 
 impl Session {
     /// Connect. On failure the error names the step that failed and carries a hint.
     pub async fn open(profile: ConnectionProfile, secrets: &ProfileSecrets) -> Result<Self> {
+        let live = Self::connect(&profile, secrets).await?;
+        Ok(Self {
+            id: Uuid::new_v4(),
+            profile,
+            secrets: secrets.clone(),
+            live: Mutex::new(Arc::new(live)),
+            reconnecting: Default::default(),
+            reconnected: AtomicBool::new(false),
+            busy: AtomicUsize::new(0),
+            last_used: Mutex::new(SystemTime::now()),
+        })
+    }
+
+    async fn connect(profile: &ConnectionProfile, secrets: &ProfileSecrets) -> Result<Live> {
         let mut steps = Steps::default();
-        match Self::open_with(profile, secrets, &mut steps).await {
-            Ok(s) => Ok(s),
-            Err(e) => Err(match steps.list.iter().find(|s| s.status == StepStatus::Failed) {
+        Self::open_with(profile, secrets, &mut steps).await.map_err(|e| {
+            match steps.list.iter().find(|s| s.status == StepStatus::Failed) {
                 Some(failed) => {
                     Error::Step { step: failed.label.clone(), hint: failed.hint.clone(), source: Box::new(e) }
                 }
                 None => e,
-            }),
-        }
+            }
+        })
     }
 
     /// Connect step by step, recording each one, then disconnect.
@@ -56,13 +104,13 @@ impl Session {
         let plan = steps::plan(&profile);
         let hops = profile.network.active_hops().len();
         let mut steps = Steps::default();
-        let result = Self::open_with(profile, secrets, &mut steps).await;
+        let result = Self::open_with(&profile, secrets, &mut steps).await;
         let elapsed_ms = started.elapsed().as_millis() as u64;
         match result {
-            Ok(s) => TestReport {
+            Ok(live) => TestReport {
                 ok: true,
                 steps: steps.list,
-                server_version: Some(s.server_version.clone()),
+                server_version: Some(live.server_version.clone()),
                 hops,
                 elapsed_ms,
                 error: None,
@@ -74,7 +122,7 @@ impl Session {
         }
     }
 
-    async fn open_with(profile: ConnectionProfile, secrets: &ProfileSecrets, steps: &mut Steps) -> Result<Self> {
+    async fn open_with(profile: &ConnectionProfile, secrets: &ProfileSecrets, steps: &mut Steps) -> Result<Live> {
         if profile.host.trim().is_empty() {
             return Err(Error::Config("Enter the database host first".into()));
         }
@@ -113,9 +161,9 @@ impl Session {
         let sign_in = label::db_sign_in(steps::engine_name(profile.engine), &profile.user);
         let connected = match profile.engine {
             Engine::Postgres => {
-                db::postgres::connect(&profile, pw, (host, port)).await.map(|(c, v)| (DbConn::Postgres(c), v))
+                db::postgres::connect(profile, pw, (host, port)).await.map(|(c, v)| (DbConn::Postgres(c), v))
             }
-            Engine::Mysql => db::mysql::connect(&profile, pw, (host, port)).await.map(|(c, v)| (DbConn::Mysql(c), v)),
+            Engine::Mysql => db::mysql::connect(profile, pw, (host, port)).await.map(|(c, v)| (DbConn::Mysql(c), v)),
         };
         let (db, server_version) = match connected {
             Ok(ok) => ok,
@@ -131,7 +179,7 @@ impl Session {
                         )),
                     );
                 } else {
-                    let hint = db_hint(&profile, &e, tunnel.is_some(), pw.is_some());
+                    let hint = db_hint(profile, &e, tunnel.is_some(), pw.is_some());
                     steps.failed(sign_in, &e, hint);
                 }
                 return Err(e);
@@ -142,28 +190,34 @@ impl Session {
             steps.ok(label::db_open(&profile.database), None);
         }
 
-        Ok(Self { id: Uuid::new_v4(), profile, server_version, db, tunnel })
+        Ok(Live { server_version, db, tunnel, lost: AtomicBool::new(false) })
     }
 
     pub fn info(&self) -> SessionInfo {
+        let live = self.current();
         SessionInfo {
             session_id: self.id,
             profile_id: self.profile.id,
-            server_version: self.server_version.clone(),
-            hops: if self.tunnel.is_some() { self.profile.network.active_hops().len() } else { 0 },
+            server_version: live.server_version.clone(),
+            hops: if live.tunnel.is_some() { self.profile.network.active_hops().len() } else { 0 },
         }
     }
 
-    pub async fn run(&self, sql: &str) -> Result<QueryOutput> {
+    /// Run SQL. A connection that dropped is opened again first. If it drops while the statement
+    /// runs, the statement runs again only with `rerun` (it only reads, so twice is harmless).
+    pub async fn run(&self, sql: &str, rerun: bool) -> Result<QueryOutput> {
         let started = Instant::now();
-        let sets = match &self.db {
-            DbConn::Postgres(c) => {
-                if c.is_closed() {
-                    return Err(Error::NoSession);
+        let live = self.live().await?;
+        let sets = match self.track(live.db.run(sql)).await {
+            Err(Error::ConnectionLost(_)) => {
+                live.lost.store(true, Ordering::SeqCst);
+                if !rerun {
+                    return Err(Error::Interrupted);
                 }
-                c.run(sql).await?
+                let live = self.live().await?;
+                self.track(live.db.run(sql)).await?
             }
-            DbConn::Mysql(c) => c.run(sql).await?,
+            other => other?,
         };
         Ok(QueryOutput { sets, elapsed_ms: started.elapsed().as_millis() as u64 })
     }
@@ -176,15 +230,68 @@ impl Session {
         if edits.is_empty() {
             return Ok(0);
         }
-        match &self.db {
-            DbConn::Postgres(c) => c.apply(edits).await,
-            DbConn::Mysql(c) => c.apply(edits).await,
+        let live = self.live().await?;
+        let result = self.track(live.db.apply(edits)).await;
+        if let Err(Error::ConnectionLost(_)) = result {
+            // The next statement opens it again; these edits may or may not have been saved.
+            live.lost.store(true, Ordering::SeqCst);
+            return Err(Error::Interrupted);
         }
+        result
     }
 
     pub async fn introspect(&self) -> Result<Vec<TableInfo>> {
-        let out = self.run(db::introspection_sql(self.profile.engine)).await?;
+        let out = self.run(db::introspection_sql(self.profile.engine), true).await?;
         Ok(out.sets.first().map(db::fold_tables).unwrap_or_default())
+    }
+
+    /// Whether the connection was opened again since the last call, to tell the user once.
+    pub fn take_reconnected(&self) -> bool {
+        self.reconnected.swap(false, Ordering::SeqCst)
+    }
+
+    fn current(&self) -> Arc<Live> {
+        self.live.lock().unwrap().clone()
+    }
+
+    /// The connection to use: the current one, or a new one when it has dropped. After a pause it
+    /// is pinged first, so a connection that died during sleep doesn't swallow the statement.
+    async fn live(&self) -> Result<Arc<Live>> {
+        let live = self.current();
+        let idle = self.busy.load(Ordering::SeqCst) == 0
+            && self.last_used.lock().unwrap().elapsed().map_or(true, |d| d > IDLE);
+        if live.is_closed() || (idle && !live.answers().await) {
+            return self.reconnect(&live).await;
+        }
+        Ok(live)
+    }
+
+    /// Open a new connection in place of `dead`, unless another statement already did.
+    async fn reconnect(&self, dead: &Arc<Live>) -> Result<Arc<Live>> {
+        let _one = self.reconnecting.lock().await;
+        let live = self.current();
+        if !Arc::ptr_eq(&live, dead) {
+            return Ok(live);
+        }
+        let fresh = Arc::new(Self::connect(&self.profile, &self.secrets).await?);
+        *self.live.lock().unwrap() = fresh.clone();
+        self.reconnected.store(true, Ordering::SeqCst);
+        tracing::info!("the connection to {} dropped and was opened again", self.profile.name);
+        Ok(fresh)
+    }
+
+    /// Count `fut` as a running statement, for `live`'s idle check.
+    async fn track<T>(&self, fut: impl Future<Output = Result<T>>) -> Result<T> {
+        struct Running<'a>(&'a Session);
+        impl Drop for Running<'_> {
+            fn drop(&mut self) {
+                self.0.busy.fetch_sub(1, Ordering::SeqCst);
+                *self.0.last_used.lock().unwrap() = SystemTime::now();
+            }
+        }
+        self.busy.fetch_add(1, Ordering::SeqCst);
+        let _running = Running(self);
+        fut.await
     }
 }
 

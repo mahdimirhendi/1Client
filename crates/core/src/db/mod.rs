@@ -4,11 +4,44 @@
 pub(crate) mod mysql;
 pub(crate) mod postgres;
 
-use crate::{ColumnInfo, Engine, ResultSet, TableInfo};
+use crate::edit::RowEdit;
+use crate::{ColumnInfo, Engine, Result, ResultSet, TableInfo};
 
 pub(crate) enum DbConn {
     Postgres(postgres::PgConn),
     Mysql(mysql::MyConn),
+}
+
+impl DbConn {
+    pub(crate) async fn run(&self, sql: &str) -> Result<Vec<ResultSet>> {
+        match self {
+            DbConn::Postgres(c) => c.run(sql).await,
+            DbConn::Mysql(c) => c.run(sql).await,
+        }
+    }
+
+    pub(crate) async fn apply(&self, edits: &[RowEdit]) -> Result<u64> {
+        match self {
+            DbConn::Postgres(c) => c.apply(edits).await,
+            DbConn::Mysql(c) => c.apply(edits).await,
+        }
+    }
+
+    /// The driver already knows the connection is gone (MySQL only finds out when it is used).
+    pub(crate) fn is_closed(&self) -> bool {
+        match self {
+            DbConn::Postgres(c) => c.is_closed(),
+            DbConn::Mysql(_) => false,
+        }
+    }
+
+    /// The cheapest round trip to the server.
+    pub(crate) async fn ping(&self) -> Result<()> {
+        match self {
+            DbConn::Postgres(c) => c.ping().await,
+            DbConn::Mysql(c) => c.ping().await,
+        }
+    }
 }
 
 /// Columns of every user table and view, with key flags.

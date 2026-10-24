@@ -12,7 +12,7 @@ use oneclient_core::link::{parse_link, IncomingConnection};
 use oneclient_core::secrets::{ProfileSecrets, SecretField, SecretStore};
 use oneclient_core::steps::{Step, StepStatus};
 use oneclient_core::{
-    tunnel, Canvas, ConnectionProfile, ConnectionStore, DiagramStore, EnvironmentDef, EnvironmentStore, Error,
+    known_hosts, Canvas, ConnectionProfile, ConnectionStore, DiagramStore, EnvironmentDef, EnvironmentStore, Error,
     HistoryEntry, QueryOutput, QueryStore, SavedQuery, SecretsInput, Session, SessionInfo, TableInfo, TestReport,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -49,6 +49,13 @@ struct LinkEvent {
 impl AppState {
     async fn session(&self, id: Uuid) -> CmdResult<Arc<Session>> {
         self.sessions.read().await.get(&id).cloned().ok_or(Error::NoSession)
+    }
+}
+
+/// Tell the window when a session's connection dropped and was opened again.
+fn report_reconnect(app: &AppHandle, session: &Session) {
+    if session.take_reconnected() {
+        let _ = app.emit("reconnected", session.id);
     }
 }
 
@@ -210,9 +217,10 @@ async fn test_connection(
     Ok(Session::test(profile, &merged).await)
 }
 
+/// The server's key changed and the user confirmed it was expected: forget the old key, keep the new one.
 #[tauri::command]
-fn trust_host_key(host: String, port: u16, key: String) -> CmdResult<()> {
-    tunnel::trust_host_key(&host, port, &key)
+async fn replace_host_key(host: String, port: u16, key: String) -> CmdResult<()> {
+    known_hosts::replace(&host, port, &key).await
 }
 
 // ---------- Sessions ----------
@@ -252,16 +260,20 @@ async fn close_session(state: State<'_, AppState>, session_id: Uuid) -> CmdResul
 
 /// Run SQL. With `record`, the run is kept in the connection's history (query tabs do this;
 /// browsing a table doesn't). Connections opened from a link and not saved keep no history.
+/// `rerun`: the SQL only reads, so it may run again if the connection drops while it runs.
 #[tauri::command]
 async fn run_query(
+    app: AppHandle,
     state: State<'_, AppState>,
     session_id: Uuid,
     sql: String,
     record: Option<bool>,
+    rerun: Option<bool>,
 ) -> CmdResult<QueryOutput> {
     let session = state.session(session_id).await?;
     let started = Instant::now();
-    let result = session.run(&sql).await;
+    let result = session.run(&sql, rerun.unwrap_or(false)).await;
+    report_reconnect(&app, &session);
     let profile_id = session.profile.id;
     if record.unwrap_or(false) && state.store.lock().await.get(profile_id).is_some() {
         let elapsed = started.elapsed().as_millis() as u64;
@@ -382,8 +394,16 @@ fn set_appearance(app: tauri::AppHandle, mode: String) {
 
 /// Save cells edited in the results grid.
 #[tauri::command]
-async fn apply_edits(state: State<'_, AppState>, session_id: Uuid, edits: Vec<RowEdit>) -> CmdResult<u64> {
-    state.session(session_id).await?.apply_edits(&edits).await
+async fn apply_edits(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session_id: Uuid,
+    edits: Vec<RowEdit>,
+) -> CmdResult<u64> {
+    let session = state.session(session_id).await?;
+    let result = session.apply_edits(&edits).await;
+    report_reconnect(&app, &session);
+    result
 }
 
 /// The UPDATE statements saving would run, for the confirmation dialog.
@@ -394,8 +414,11 @@ async fn preview_edits(state: State<'_, AppState>, session_id: Uuid, edits: Vec<
 }
 
 #[tauri::command]
-async fn introspect(state: State<'_, AppState>, session_id: Uuid) -> CmdResult<Vec<TableInfo>> {
-    state.session(session_id).await?.introspect().await
+async fn introspect(app: AppHandle, state: State<'_, AppState>, session_id: Uuid) -> CmdResult<Vec<TableInfo>> {
+    let session = state.session(session_id).await?;
+    let result = session.introspect().await;
+    report_reconnect(&app, &session);
+    result
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -487,7 +510,7 @@ pub fn run() {
             secret_references,
             reveal_secret,
             test_connection,
-            trust_host_key,
+            replace_host_key,
             open_session,
             close_session,
             run_query,

@@ -73,20 +73,15 @@ pub enum Error {
     #[error("SSH {host}: {message}")]
     Ssh { host: String, message: String },
 
-    #[error("{host}:{port} is not in ~/.ssh/known_hosts (key {fingerprint}). Trust it to continue.")]
-    UnknownHostKey {
+    #[error("{host}:{port} sent key {fingerprint}, which does not match ~/.ssh/known_hosts line {line}.")]
+    HostKeyChanged {
         host: String,
         port: u16,
+        line: usize,
         fingerprint: String,
-        /// The key in OpenSSH format, passed back to `trust_host_key`.
+        /// The new key in OpenSSH format, passed back to `replace_host_key`.
         key: String,
     },
-
-    #[error(
-        "{host}:{port} sent key {fingerprint}, which does not match ~/.ssh/known_hosts line {line}. Check with `ssh-keygen -F '{}'` before trusting it.",
-        crate::known_hosts::entry_name(.host, *.port)
-    )]
-    HostKeyChanged { host: String, port: u16, line: usize, fingerprint: String },
 
     /// A database connect failure, with the part that failed.
     #[error("{message}")]
@@ -112,6 +107,14 @@ pub enum Error {
     #[error("This session is closed")]
     NoSession,
 
+    /// The connection dropped: the Mac slept, the network changed, or the server restarted.
+    #[error("The connection to the server was lost: {0}")]
+    ConnectionLost(String),
+
+    /// The connection dropped while a statement that may change data ran: it is not sent twice.
+    #[error("The connection dropped while this ran. Check whether the change was made before running it again.")]
+    Interrupted,
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -131,11 +134,12 @@ impl Error {
             Error::Config(_) => "config",
             Error::Secret(_) => "secret",
             Error::Ssh { .. } => "ssh",
-            Error::UnknownHostKey { .. } => "unknownHostKey",
             Error::HostKeyChanged { .. } => "hostKeyChanged",
             Error::Postgres(_) | Error::Mysql(_) | Error::DbConnect { .. } | Error::Db(_) => "database",
             Error::Timeout(_) => "timeout",
             Error::NoSession => "noSession",
+            Error::ConnectionLost(_) => "connectionLost",
+            Error::Interrupted => "interrupted",
             Error::Io(_) => "io",
         }
     }
@@ -145,7 +149,7 @@ impl Error {
     }
 }
 
-/// Errors cross the Tauri bridge as `{ kind, message, host?, port?, fingerprint?, key? }`.
+/// Errors cross the Tauri bridge as `{ kind, message, step?, hint?, db?, host?, port?, fingerprint?, key? }`.
 impl serde::Serialize for Error {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let mut st = s.serialize_struct("Error", 8)?;
@@ -158,7 +162,7 @@ impl serde::Serialize for Error {
         if let Error::Db(db) = self.root() {
             st.serialize_field("db", db.as_ref())?;
         }
-        if let Error::UnknownHostKey { host, port, fingerprint, key } = self.root() {
+        if let Error::HostKeyChanged { host, port, fingerprint, key, .. } = self.root() {
             st.serialize_field("host", host)?;
             st.serialize_field("port", port)?;
             st.serialize_field("fingerprint", fingerprint)?;
@@ -170,6 +174,16 @@ impl serde::Serialize for Error {
 
 impl From<tokio_postgres::Error> for Error {
     fn from(e: tokio_postgres::Error) -> Self {
+        use tokio_postgres::error::Severity;
+        // FATAL ends the session: an admin ended it, the server is shutting down, a timeout hit.
+        let ended =
+            e.as_db_error().filter(|db| matches!(db.parsed_severity(), Some(Severity::Fatal | Severity::Panic)));
+        if let Some(db) = ended {
+            return Error::ConnectionLost(db.message().to_string());
+        }
+        if e.is_closed() {
+            return Error::ConnectionLost(chain(&e));
+        }
         // Keep everything the server sent: SQLSTATE, detail, hint and where in the statement.
         match e.as_db_error() {
             Some(db) => Error::Db(Box::new(DbError {
@@ -203,6 +217,10 @@ impl From<mysql_async::Error> for Error {
                 hint: None,
                 position: None,
             })),
+            lost @ (mysql_async::Error::Io(_)
+            | mysql_async::Error::Driver(mysql_async::DriverError::ConnectionClosed)) => {
+                Error::ConnectionLost(lost.to_string())
+            }
             other => Error::Mysql(other.to_string()),
         }
     }

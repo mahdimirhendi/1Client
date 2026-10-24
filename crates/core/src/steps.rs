@@ -64,6 +64,13 @@ impl Steps {
         self.list.push(Step { label: label.into(), status: StepStatus::Ok, detail, hint: None, ms: None });
     }
 
+    /// Say what the last step did ("new server, key … added").
+    pub fn note(&mut self, detail: String) {
+        if let Some(last) = self.list.last_mut() {
+            last.detail = Some(detail);
+        }
+    }
+
     pub fn failed(&mut self, label: impl Into<String>, e: &Error, hint: Option<String>) {
         self.list.push(Step {
             label: label.into(),

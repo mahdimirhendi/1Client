@@ -16,6 +16,7 @@ import type {
 } from "../types";
 import { envColors, useDarkMode } from "../lib/theme";
 import { EngineBadge, IconCheck, IconEye, IconEyeOff, IconPlus } from "./Icons";
+import { ReplaceHostKey } from "./ReplaceHostKey";
 import { exact } from "../lib/input";
 
 const uid = () => crypto.randomUUID();
@@ -174,17 +175,6 @@ export function ConnectionSheet() {
     } catch (e) {
       setTest({ state: "error", error: e as AppError });
     }
-  };
-
-  const trustAndRetry = async (err: AppError) => {
-    if (!err.host || !err.port || !err.key) return;
-    try {
-      await api.trustHostKey(err.host, err.port, err.key);
-    } catch (e) {
-      // e.g. ~/.ssh/known_hosts can't be written.
-      return setTest({ state: "error", error: e as AppError });
-    }
-    runTest();
   };
 
   const save = async (connect: boolean) => {
@@ -538,7 +528,7 @@ export function ConnectionSheet() {
               </div>
             </div>
 
-            {test.state === "ok" && <TestSteps key={test.report.elapsedMs} report={test.report} onTrust={trustAndRetry} />}
+            {test.state === "ok" && <TestSteps key={test.report.elapsedMs} report={test.report} onRetry={runTest} />}
           </div>
 
           <div className="sheet-foot">
@@ -599,7 +589,7 @@ function TestStatus({ test }: { test: Test }) {
 }
 
 /** Every step of the test: what worked, what failed (with a hint), and what was not tried. */
-function TestSteps({ report, onTrust }: { report: TestReport; onTrust: (e: AppError) => void }) {
+function TestSteps({ report, onRetry }: { report: TestReport; onRetry: () => void }) {
   const [showPassed, setShowPassed] = useState(false);
   const ref = useRef<HTMLOListElement>(null);
   // Braces matter: newer engines return a Promise from scroll methods, and an effect may only return a cleanup.
@@ -639,14 +629,7 @@ function TestSteps({ report, onTrust }: { report: TestReport; onTrust: (e: AppEr
               <>
                 {s.detail && <div className="test-detail">{s.detail}</div>}
                 {s.hint && <div className="test-hint">{s.hint}</div>}
-                {report.error?.kind === "unknownHostKey" && (
-                  <div className="row gap8" style={{ marginTop: 6 }}>
-                    <span className="mono small">{report.error.fingerprint}</span>
-                    <button className="btn small" onClick={() => onTrust(report.error!)}>
-                      Trust and Retry
-                    </button>
-                  </div>
-                )}
+                {report.error && <ReplaceHostKey error={report.error} onReplaced={onRetry} />}
               </>
             )}
           </div>

@@ -10,7 +10,8 @@ import { SaveQuerySheet } from "./components/SaveQuerySheet";
 import { ToastHost } from "./components/Toast";
 import { Welcome } from "./components/Welcome";
 import { Workspace } from "./components/Workspace";
-import { onLinksPending, onMenu } from "./api";
+import { onLinksPending, onMenu, onReconnected } from "./api";
+import { showToast } from "./lib/toast";
 import { editorCommand, runActive } from "./components/QueryEditor";
 import { useResultsView } from "./components/Results";
 import { useAppearance, type Appearance } from "./lib/theme";
@@ -32,6 +33,16 @@ export default function App() {
     receiveLinks();
     let stop: (() => void) | undefined;
     onLinksPending(() => useApp.getState().receiveLinks()).then((f) => (stop = f));
+    return () => stop?.();
+  }, []);
+
+  // A connection that dropped (the Mac slept, the network changed) was opened again.
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    onReconnected((id) => {
+      const conn = useApp.getState().conns.find((c) => c.id === id);
+      if (conn) showToast(`Reconnected to ${conn.profile.name}`);
+    }).then((f) => (stop = f));
     return () => stop?.();
   }, []);
 

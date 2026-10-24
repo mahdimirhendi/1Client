@@ -42,7 +42,8 @@ export const api = {
   deleteConnection: (id: string) => call<void>("delete_connection", { id }),
   testConnection: (profile: ConnectionProfile, secrets?: SecretsInput) =>
     call<TestReport>("test_connection", { profile, secrets }),
-  trustHostKey: (host: string, port: number, key: string) => call<void>("trust_host_key", { host, port, key }),
+  /** The server's SSH key changed and the user confirmed it: remove the old key (ssh-keygen -R), keep this one. */
+  replaceHostKey: (host: string, port: number, key: string) => call<void>("replace_host_key", { host, port, key }),
   openSession: (profileId: string) => call<SessionInfo>("open_session", { profileId }),
   secretReferences: (id: string) => call<SecretsInput>("secret_references", { id }),
   /** One saved password, only when the user asks to see it. */
@@ -52,8 +53,12 @@ export const api = {
   takeStartupProblems: () => call<string[]>("take_startup_problems"),
   takePendingLinks: () => call<{ profile: ConnectionProfile | null; error: string | null }[]>("take_pending_links"),
   saveTempConnection: (id: string) => call<ConnectionProfile>("save_temp_connection", { id }),
-  /** `record` keeps the run in the connection's history (query tabs). */
-  runQuery: (sessionId: string, sql: string, record = false) => call<QueryOutput>("run_query", { sessionId, sql, record }),
+  /**
+   * `record` keeps the run in the connection's history (query tabs). `rerun`: the SQL only reads,
+   * so it may run again when the connection drops while it runs.
+   */
+  runQuery: (sessionId: string, sql: string, record = false, rerun = false) =>
+    call<QueryOutput>("run_query", { sessionId, sql, record, rerun }),
   listHistory: (profileId: string) => call<HistoryEntry[]>("list_history", { profileId }),
   deleteHistory: (id: string) => call<void>("delete_history", { id }),
   clearHistory: (profileId: string) => call<void>("clear_history", { profileId }),
@@ -77,6 +82,13 @@ export async function onLinksPending(onLink: () => void): Promise<() => void> {
   if (!isTauri()) return () => {};
   const { listen } = await import("@tauri-apps/api/event");
   return listen("links-pending", () => onLink());
+}
+
+/** A session's connection dropped (sleep, network change) and was opened again. */
+export async function onReconnected(handler: (sessionId: string) => void): Promise<() => void> {
+  if (!isTauri()) return () => {};
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<string>("reconnected", (e) => handler(e.payload));
 }
 
 /** Menu bar items (macOS) arrive as their id: "new-connection", "run-all", "appearance:dark", ... */

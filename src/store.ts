@@ -416,7 +416,7 @@ export const useApp = create<State>((set, get) => ({
     const sql = countSql(conn.profile.engine, doc.table, doc.view);
     set((s) => ({ conns: patchDoc(s.conns, connId, docId, { count: { sql, rows: null } }) }));
     try {
-      const out = await api.runQuery(connId, sql);
+      const out = await api.runQuery(connId, sql, false, true);
       const rows = Number(out.sets[0]?.rows[0]?.[0]);
       set((s) => ({ conns: patchDoc(s.conns, connId, docId, { count: Number.isFinite(rows) ? { sql, rows } : undefined }) }));
     } catch (e) {
@@ -443,13 +443,14 @@ export const useApp = create<State>((set, get) => ({
     if (doc?.dirty) return showToast("Save or discard your changes in the grid before running the query again.", "error");
     // What runs from a query tab goes into the history; browsing a table doesn't.
     const record = doc?.kind === "query";
-    if (!confirmed && conn.profile.confirmWrites && splitStatements(sql).some((s) => isWrite(s.text))) {
+    const writes = splitStatements(sql).some((s) => isWrite(s.text));
+    if (!confirmed && conn.profile.confirmWrites && writes) {
       set({ pendingWrite: { connId, docId, sql } });
       return;
     }
     set((s) => ({ conns: patchDoc(s.conns, connId, docId, { running: true, error: undefined }) }));
     try {
-      const output = await api.runQuery(connId, sql, record);
+      const output = await api.runQuery(connId, sql, record, !writes);
       set((s) => ({ conns: patchDoc(s.conns, connId, docId, { running: false, output, lastRun: sql }) }));
       if (splitStatements(sql).some((s) => /^\s*(create|alter|drop|rename)\b/i.test(s.text))) get().refreshSchema(connId);
     } catch (e) {

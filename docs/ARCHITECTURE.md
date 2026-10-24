@@ -45,10 +45,21 @@ by a command-line tool.
   step. The last session then forwards a random local port on `127.0.0.1` to the database, and the
   driver connects there. TLS still uses the real host name, so certificates verify through a tunnel.
 - **Host keys.** Checked against `~/.ssh/known_hosts` with OpenSSH rules: hashed hosts, `[host]:port`,
-  wildcards, negation and `@revoked`. A host is trusted when any matching line has the same key. An
-  unknown host stops the connection and the UI offers "Trust and Retry"; a changed key is a hard error.
+  wildcards, negation and `@revoked`. A host is trusted when any matching line has the same key. A
+  host seen for the first time is trusted and added to the file, like `ssh -o
+  StrictHostKeyChecking=accept-new`, and the connection test says so. A changed key stops the
+  connection: the UI shows the new fingerprint and, only when the user confirms, removes the old key
+  with `ssh-keygen -R` (which keeps `known_hosts.old`) and adds the new one.
 - **Sessions.** One connection tab is one `Session`: an optional tunnel plus a single database
   connection, so `USE`, session variables and transactions behave as typed. Closing the tab drops both.
+- **Reconnecting.** When the connection drops (the Mac slept, the network changed, the server
+  restarted), the session opens a new one by itself, tunnel included. Before a statement runs, a
+  connection the driver or SSH already knows is closed is replaced; so is one that has been idle for
+  30 seconds and doesn't answer a ping within 3, which is how a connection looks after sleep. If it
+  drops while a statement runs, the statement runs again only when it only reads (the UI decides with
+  the same check that asks before writes); anything else is reported as interrupted and never sent
+  twice. A new connection is a new database session, so temporary tables, session variables and an
+  open transaction are gone, and the UI shows "Reconnected".
 - **Connection test.** Every step (reach host, verify host key, sign in, reach the database, sign in,
   open the database) is recorded with its time. A failure names the step, keeps the server's message
   and adds a hint; later steps are shown as not tried.
@@ -71,7 +82,7 @@ by a command-line tool.
   used as written. Any other result is sorted in the grid by value: numbers, dates and times by value,
   text alphabetically.
 - **Errors.** One `Error` type, serialised to the UI as `{ kind, message, … }`. Server errors keep every
-  field (code, SQLSTATE, detail, hint, position); `unknownHostKey` carries the key for "Trust and Retry".
+  field (code, SQLSTATE, detail, hint, position); `hostKeyChanged` carries the new key for "Replace Key and Retry".
 - **Saved data.** Every file in the app's data folder is replaced atomically (written next to it, then
   renamed over it). A file that can't be read at launch is kept as `*.invalid` for recovery and the app
   starts without it; for connections, environments and the password vault the welcome window says so.
@@ -109,6 +120,8 @@ by a command-line tool.
 - Saved passwords are not sent to the UI. The edit sheet's eye button asks for one saved value of a
   saved connection when it is clicked, and nothing else returns them.
 - Removing a connection, an SSH hop or a hop's password sign-in removes the matching secrets.
+- An open connection keeps its passwords in memory, so it can connect again after sleep; they go
+  when its tab is closed.
 - SSL mode `require` encrypts without verifying the certificate (libpq semantics); "Verify certificate"
   checks the chain and host name and should be used wherever possible.
 - "Read-only session" and "Ask before running writes" are safety nets against mistakes, not

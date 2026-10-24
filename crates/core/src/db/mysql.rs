@@ -101,6 +101,10 @@ async fn is_mariadb(conn: &mut Conn) -> bool {
 }
 
 impl MyConn {
+    pub(crate) async fn ping(&self) -> Result<()> {
+        Ok(self.conn.lock().await.ping().await?)
+    }
+
     pub(crate) async fn run(&self, sql: &str) -> Result<Vec<ResultSet>> {
         let mut conn = self.conn.lock().await;
         let mut result = conn.query_iter(sql).await?;

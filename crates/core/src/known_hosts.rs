@@ -7,8 +7,8 @@
 //!
 //! - any matching line with the same key → trusted
 //! - a matching `@revoked` line with the same key → refused
-//! - no same key, but a same-type key is recorded → changed (refused)
-//! - nothing recorded for this key type → unknown (UI offers "Trust and Retry")
+//! - no same key, but a same-type key is recorded → changed (refused; the UI offers to replace it)
+//! - nothing recorded for this key type → unknown (trusted and added, like `StrictHostKeyChecking=accept-new`)
 //!
 //! Supports hashed hosts (`|1|…`), `[host]:port`, comma lists, `*`/`?` wildcards and `!` negation.
 //! `@cert-authority` lines are skipped (host certificates are not supported yet).
@@ -19,6 +19,8 @@ use data_encoding::BASE64;
 use hmac::{Hmac, KeyInit, Mac};
 use russh::keys::PublicKey;
 use sha1::Sha1;
+
+use crate::{Error, Result};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum HostKeyStatus {
@@ -44,6 +46,45 @@ pub fn entry_name(host: &str, port: u16) -> String {
 
 pub fn default_path() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".ssh").join("known_hosts"))
+}
+
+/// Add `key` for the host to ~/.ssh/known_hosts, as `ssh` does when it meets a server for the
+/// first time.
+pub fn learn(host: &str, port: u16, key: &PublicKey) -> Result<()> {
+    learn_at(&file(host)?, host, port, key)
+}
+
+/// The server's key changed and the user confirmed that was expected (the server was rebuilt):
+/// remove its old keys with `ssh-keygen -R`, which keeps the previous file as `known_hosts.old`,
+/// and add the new one.
+pub async fn replace(host: &str, port: u16, key_openssh: &str) -> Result<()> {
+    replace_at(&file(host)?, host, port, key_openssh).await
+}
+
+fn file(host: &str) -> Result<PathBuf> {
+    default_path().ok_or_else(|| Error::ssh(host, "HOME is not set"))
+}
+
+fn learn_at(path: &Path, host: &str, port: u16, key: &PublicKey) -> Result<()> {
+    russh::keys::known_hosts::learn_known_hosts_path(&host.to_ascii_lowercase(), port, key, path)
+        .map_err(|e| Error::ssh(host, format!("could not add the host key to {}: {e}", path.display())))
+}
+
+async fn replace_at(path: &Path, host: &str, port: u16, key_openssh: &str) -> Result<()> {
+    let key = PublicKey::from_openssh(key_openssh).map_err(|e| Error::ssh(host, e))?;
+    let out = tokio::process::Command::new("ssh-keygen")
+        .arg("-R")
+        .arg(entry_name(&host.to_ascii_lowercase(), port))
+        .arg("-f")
+        .arg(path)
+        .output()
+        .await
+        .map_err(|e| Error::ssh(host, format!("could not run ssh-keygen: {e}")))?;
+    if !out.status.success() {
+        let why = String::from_utf8_lossy(&out.stderr);
+        return Err(Error::ssh(host, format!("ssh-keygen -R failed: {}", why.trim())));
+    }
+    learn_at(path, host, port, &key)
 }
 
 pub fn check(host: &str, port: u16, key: &PublicKey) -> HostKeyStatus {
@@ -186,16 +227,26 @@ mod tests {
     }
 
     #[test]
-    fn entry_names_and_the_changed_key_message() {
+    fn entry_names() {
         assert_eq!(entry_name("db.example.com", 22), "db.example.com");
         assert_eq!(entry_name("10.0.0.5", 2222), "[10.0.0.5]:2222");
-        let e = crate::Error::HostKeyChanged {
-            host: "10.0.0.5".into(),
-            port: 2222,
-            line: 3,
-            fingerprint: "SHA256:x".into(),
-        };
-        assert!(e.to_string().contains("ssh-keygen -F '[10.0.0.5]:2222'"), "{e}");
+    }
+
+    #[tokio::test]
+    async fn replacing_a_changed_key_keeps_other_hosts() {
+        let dir = std::env::temp_dir().join(format!("oneclient-kh-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("known_hosts");
+        std::fs::write(&path, format!("[db.example.com]:2222 {A}\nother.example.com {A}\n")).unwrap();
+        assert_eq!(check_path("db.example.com", 2222, &key(B), &path), HostKeyStatus::Changed { line: 1 });
+
+        replace_at(&path, "DB.example.com", 2222, B).await.unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(check_text("db.example.com", 2222, &key(B), &text), HostKeyStatus::Trusted);
+        assert_eq!(check_text("db.example.com", 2222, &key(A), &text), HostKeyStatus::Changed { line: 2 });
+        assert_eq!(check_text("other.example.com", 22, &key(A), &text), HostKeyStatus::Trusted);
+        assert!(dir.join("known_hosts.old").exists(), "ssh-keygen keeps the previous file");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

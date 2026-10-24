@@ -29,7 +29,12 @@ connection is tagged with its environment so you always know where you are.
 - PostgreSQL 12+, MySQL 5.7 / 8.x and MariaDB, with TLS (disable, prefer, require, or verify certificate).
 - **Direct**, **SSH tunnel** or **bastion chain** (any number of jump hosts, like OpenSSH `ProxyJump`).
   Each hop signs in with the SSH agent (including 1Password's agent), a key file or a password.
-- Host keys are checked against `~/.ssh/known_hosts` with OpenSSH rules, with *Trust and Retry* for new hosts.
+- **Stays connected.** After sleep or a network change, the connection and its SSH tunnel are opened
+  again by themselves before your next statement runs. A query that was cut off runs again; a write
+  is never sent twice.
+- Host keys are checked against `~/.ssh/known_hosts` with OpenSSH rules. A new server is trusted and
+  added, like `ssh -o StrictHostKeyChecking=accept-new`. If a server's key changes, 1Client stops and
+  shows the new fingerprint; **Replace Key and Retry** runs `ssh-keygen -R` for you and connects.
 - **Test Connection** walks through every step (reach the host, verify its key, sign in, reach the
   database, sign in, open the database) and tells you which one failed, why, and what to try.
 - Paste a `postgres://` or `mysql://` URL to fill in the form, or open connections from other apps with a link.
@@ -211,7 +216,7 @@ and [docs/DESIGN.md](docs/DESIGN.md) for the visual language.
 - Cancel a running query, and a statement timeout setting
 - Insert and delete rows; a structure view (columns, indexes, DDL)
 - Export results as CSV, TSV, JSON or `INSERT` statements
-- Import hosts from `~/.ssh/config`; automatic tunnel reconnect
+- Import hosts from `~/.ssh/config`
 - `EXPLAIN` view, query parameters
 - Signed and notarized builds with automatic updates
 - Redis and SQLite

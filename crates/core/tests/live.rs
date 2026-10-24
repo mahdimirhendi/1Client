@@ -9,10 +9,16 @@
 //! ```
 //!
 //! Each test skips itself when its variables are missing. SSH tests add unknown host
-//! keys to ~/.ssh/known_hosts, so only point them at machines you trust.
+//! keys to ~/.ssh/known_hosts (and replace a test server's key that changed), so only point them
+//! at machines you trust, or run them with `HOME` set to a scratch directory.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use oneclient_core::secrets::{HopSecret, ProfileSecrets};
 use oneclient_core::*;
+use tokio::net::{TcpListener, TcpStream};
 use uuid::Uuid;
 
 struct Db {
@@ -60,21 +66,84 @@ fn profile(engine: Engine, d: &Db, ssl: SslMode, network: Network) -> Connection
     }
 }
 
-/// Open a session, trusting an unknown host key once (like clicking "Trust and Retry").
-async fn open_trusting(p: ConnectionProfile, s: &ProfileSecrets) -> Session {
-    for _ in 0..4 {
+/// Open a session through SSH. A test server's key changes when its container is rebuilt: the old
+/// key is replaced, like pressing "Replace Key and Retry".
+async fn open_ssh(p: ConnectionProfile, s: &ProfileSecrets) -> Session {
+    for _ in 0..3 {
         match Session::open(p.clone(), s).await {
-            Ok(sess) => return sess,
-            Err(e) if matches!(e.root(), Error::UnknownHostKey { .. }) => {
-                let Error::UnknownHostKey { host, port, fingerprint, key } = e.root() else { unreachable!() };
-                let (host, port, key) = (host.clone(), *port, key.clone());
-                eprintln!("trusting {host}:{port} {fingerprint}");
-                tunnel::trust_host_key(&host, port, &key).unwrap();
-            }
-            Err(e) => panic!("open failed: {e}"),
+            Ok(session) => return session,
+            Err(e) => match e.root() {
+                Error::HostKeyChanged { host, port, key, .. } => known_hosts::replace(host, *port, key).await.unwrap(),
+                _ => panic!("open failed: {e}"),
+            },
         }
     }
     panic!("could not open session")
+}
+
+/// The same for tests that only call `Session::test`.
+async fn replace_changed_key(hop: &SshHop, d: &Db) {
+    let net = Network { mode: NetworkMode::SshTunnel, hops: vec![hop.clone()] };
+    let r = Session::test(profile(Engine::Postgres, d, SslMode::Prefer, net), &ProfileSecrets::default()).await;
+    if let Some(Error::HostKeyChanged { host, port, key, .. }) = r.error.as_ref().map(Error::root) {
+        known_hosts::replace(host, *port, key).await.unwrap();
+    }
+}
+
+/// A TCP proxy to a server. `freeze` leaves its open connections open but silent, like after the
+/// Mac slept; `cut` closes them, like a server that went away. New connections always work.
+struct Proxy {
+    port: u16,
+    epoch: tokio::sync::watch::Sender<u64>,
+    cut: Arc<AtomicBool>,
+}
+
+impl Proxy {
+    async fn start(host: &str, port: u16, listen: u16) -> Proxy {
+        let listener = TcpListener::bind(("127.0.0.1", listen)).await.unwrap();
+        let local = listener.local_addr().unwrap().port();
+        let (epoch, changes) = tokio::sync::watch::channel(0u64);
+        let cut = Arc::new(AtomicBool::new(false));
+        let (target, closing) = (format!("{host}:{port}"), cut.clone());
+        tokio::spawn(async move {
+            while let Ok((mut inbound, _)) = listener.accept().await {
+                let mut changed = changes.clone();
+                changed.mark_unchanged();
+                let (target, closing) = (target.clone(), closing.clone());
+                tokio::spawn(async move {
+                    let mut outbound = TcpStream::connect(&target).await.unwrap();
+                    tokio::select! {
+                        _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound) => {}
+                        _ = changed.changed() => {
+                            if !closing.load(Ordering::SeqCst) {
+                                std::future::pending::<()>().await;
+                            }
+                        }
+                    }
+                });
+            }
+        });
+        Proxy { port: local, epoch, cut }
+    }
+
+    fn freeze(&self) {
+        self.cut.store(false, Ordering::SeqCst);
+        self.epoch.send_modify(|e| *e += 1);
+    }
+
+    fn cut(&self) {
+        self.cut.store(true, Ordering::SeqCst);
+        self.epoch.send_modify(|e| *e += 1);
+    }
+}
+
+/// The server's id for the session's connection (Postgres backend pid, MySQL connection id).
+async fn connection_id(s: &Session) -> String {
+    let sql = match s.profile.engine {
+        Engine::Postgres => "SELECT pg_backend_pid()",
+        Engine::Mysql => "SELECT CONNECTION_ID()",
+    };
+    s.run(sql, true).await.unwrap().sets[0].rows[0][0].clone().unwrap()
 }
 
 #[tokio::test]
@@ -83,23 +152,23 @@ async fn postgres_direct() {
     let Some(d) = db_env("ONECLIENT_TEST_PG") else { return eprintln!("skip: ONECLIENT_TEST_PG") };
     let secrets = ProfileSecrets { db_password: Some(d.password.clone()), ..Default::default() };
     let s = Session::open(profile(Engine::Postgres, &d, SslMode::Prefer, Network::default()), &secrets).await.unwrap();
-    eprintln!("{}", s.server_version);
+    eprintln!("{}", s.info().server_version);
 
-    let out = s.run("SELECT 1 AS one, NULL::text AS nothing; SELECT 'a;b' AS semi").await.unwrap();
+    let out = s.run("SELECT 1 AS one, NULL::text AS nothing; SELECT 'a;b' AS semi", false).await.unwrap();
     assert_eq!(out.sets.len(), 2);
     assert_eq!(out.sets[0].rows[0], vec![Some("1".into()), None]);
     assert_eq!(out.sets[1].rows[0][0].as_deref(), Some("a;b"));
 
-    let single = s.run("SELECT 42::int8 AS n").await.unwrap();
+    let single = s.run("SELECT 42::int8 AS n", false).await.unwrap();
     assert_eq!(single.sets[0].columns[0].type_name.as_deref(), Some("int8"));
 
     // Big results keep the first ROW_LIMIT rows and still report the real count.
-    let big = s.run("SELECT g FROM generate_series(1, 25000) g").await.unwrap();
+    let big = s.run("SELECT g FROM generate_series(1, 25000) g", false).await.unwrap();
     assert_eq!((big.sets[0].rows.len(), big.sets[0].truncated), (ROW_LIMIT, true));
     assert_eq!(big.sets[0].row_count, Some(25_000));
     assert_eq!(big.sets[0].rows[ROW_LIMIT - 1][0].as_deref(), Some("10000"));
 
-    let err = s.run("SELECT totl FROM pg_class").await.unwrap_err();
+    let err = s.run("SELECT totl FROM pg_class", false).await.unwrap_err();
     assert!(err.to_string().contains("totl"), "{err}");
     let Error::Db(db) = &err else { panic!("expected a server error, got {err:?}") };
     assert_eq!(db.sqlstate.as_deref(), Some("42703"));
@@ -144,11 +213,12 @@ async fn postgres_keys() {
          CREATE TABLE pets (id int PRIMARY KEY, home int, CONSTRAINT fk_parent FOREIGN KEY (home) REFERENCES houses(id));
          CREATE TABLE shipments (id int PRIMARY KEY, l int, o int, FOREIGN KEY (l, o) REFERENCES lines(line, order_id));
          RESET search_path",
+        false,
     )
     .await
     .unwrap();
     let tables = s.introspect().await.unwrap();
-    s.run("DROP SCHEMA oneclient_keys CASCADE").await.unwrap();
+    s.run("DROP SCHEMA oneclient_keys CASCADE", false).await.unwrap();
     assert_eq!(
         references(&tables, "oneclient_keys"),
         [
@@ -169,13 +239,13 @@ async fn mysql_keys() {
     let secrets = ProfileSecrets { db_password: Some(d.password.clone()), ..Default::default() };
     let s = Session::open(profile(Engine::Mysql, &d, SslMode::Prefer, Network::default()), &secrets).await.unwrap();
     let drop = "DROP TABLE IF EXISTS oc_shipments, oc_lines";
-    s.run(drop).await.unwrap();
-    s.run("CREATE TABLE oc_lines (order_id INT, line INT, PRIMARY KEY (order_id, line))").await.unwrap();
-    s.run("CREATE TABLE oc_shipments (id INT PRIMARY KEY, l INT, o INT, FOREIGN KEY (o, l) REFERENCES oc_lines(order_id, line))")
+    s.run(drop, false).await.unwrap();
+    s.run("CREATE TABLE oc_lines (order_id INT, line INT, PRIMARY KEY (order_id, line))", false).await.unwrap();
+    s.run("CREATE TABLE oc_shipments (id INT PRIMARY KEY, l INT, o INT, FOREIGN KEY (o, l) REFERENCES oc_lines(order_id, line))", false)
         .await
         .unwrap();
     let tables = s.introspect().await.unwrap();
-    s.run(drop).await.unwrap();
+    s.run(drop, false).await.unwrap();
     let mine: Vec<String> = references(&tables, &d.db).into_iter().filter(|r| r.starts_with("oc_")).collect();
     assert_eq!(
         mine,
@@ -189,13 +259,14 @@ async fn mysql_direct() {
     let Some(d) = db_env("ONECLIENT_TEST_MYSQL") else { return eprintln!("skip: ONECLIENT_TEST_MYSQL") };
     let secrets = ProfileSecrets { db_password: Some(d.password.clone()), ..Default::default() };
     let s = Session::open(profile(Engine::Mysql, &d, SslMode::Prefer, Network::default()), &secrets).await.unwrap();
-    eprintln!("{}", s.server_version);
+    eprintln!("{}", s.info().server_version);
 
-    let out = s.run("SELECT 1 AS one, NULL AS nothing, CAST('2026-10-01' AS DATE) AS d; SELECT 2").await.unwrap();
+    let out =
+        s.run("SELECT 1 AS one, NULL AS nothing, CAST('2026-10-01' AS DATE) AS d; SELECT 2", false).await.unwrap();
     assert_eq!(out.sets.len(), 2);
     assert_eq!(out.sets[0].rows[0], vec![Some("1".into()), None, Some("2026-10-01".into())]);
 
-    let w = s.run("CREATE TEMPORARY TABLE t1 (x INT); INSERT INTO t1 VALUES (1),(2),(3)").await.unwrap();
+    let w = s.run("CREATE TEMPORARY TABLE t1 (x INT); INSERT INTO t1 VALUES (1),(2),(3)", false).await.unwrap();
     assert_eq!(w.sets.last().unwrap().row_count, Some(3));
 
     // Big results keep the first ROW_LIMIT rows and still report the real count.
@@ -203,6 +274,7 @@ async fn mysql_direct() {
         .run(
             "SET SESSION cte_max_recursion_depth = 30000; \
              WITH RECURSIVE seq (n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 25000) SELECT n FROM seq",
+            false,
         )
         .await
         .unwrap();
@@ -210,12 +282,12 @@ async fn mysql_direct() {
     assert_eq!((set.rows.len(), set.truncated, set.row_count), (ROW_LIMIT, true, Some(25_000)));
 
     // Fractional seconds survive.
-    let t = s.run("SELECT CAST('2026-01-02 03:04:05.123456' AS DATETIME(6))").await.unwrap();
+    let t = s.run("SELECT CAST('2026-01-02 03:04:05.123456' AS DATETIME(6))", false).await.unwrap();
     assert_eq!(t.sets[0].rows[0][0].as_deref(), Some("2026-01-02 03:04:05.123456"));
 
-    let err = s.run("SELECT nope FROM DUAL").await.unwrap_err();
+    let err = s.run("SELECT nope FROM DUAL", false).await.unwrap_err();
     assert!(err.to_string().starts_with("ERROR 1054 (42S22): Unknown column 'nope'"), "{err}");
-    let err = s.run("SELEC 1").await.unwrap_err();
+    let err = s.run("SELEC 1", false).await.unwrap_err();
     assert!(err.to_string().starts_with("ERROR 1064 (42000)"), "{err}");
     eprintln!("{err}");
 
@@ -241,9 +313,9 @@ async fn postgres_through_ssh_tunnel() {
     secrets.hops.insert(hop.id, HopSecret { password: None, key_passphrase: pass });
 
     let net = Network { mode: NetworkMode::SshTunnel, hops: vec![hop] };
-    let s = open_trusting(profile(Engine::Postgres, &d, SslMode::Require, net), &secrets).await;
+    let s = open_ssh(profile(Engine::Postgres, &d, SslMode::Require, net), &secrets).await;
     assert_eq!(s.info().hops, 1);
-    let out = s.run("SELECT current_database()").await.unwrap();
+    let out = s.run("SELECT current_database()", false).await.unwrap();
     assert_eq!(out.sets[0].rows[0][0].as_deref(), Some(d.db.as_str()));
 }
 
@@ -272,19 +344,10 @@ async fn mysql_through_two_hop_bastion() {
     );
 
     let net = Network { mode: NetworkMode::Bastion, hops: vec![h1, h2] };
-    let s = open_trusting(profile(Engine::Mysql, &d, SslMode::Prefer, net), &secrets).await;
+    let s = open_ssh(profile(Engine::Mysql, &d, SslMode::Prefer, net), &secrets).await;
     assert_eq!(s.info().hops, 2);
-    let out = s.run("SELECT DATABASE()").await.unwrap();
+    let out = s.run("SELECT DATABASE()", false).await.unwrap();
     assert_eq!(out.sets[0].rows[0][0].as_deref(), Some(d.db.as_str()));
-}
-
-/// Trust an SSH server's key like "Trust and Retry" does, so a test doesn't depend on known_hosts.
-async fn trust_host(hop: &SshHop, d: &Db) {
-    let net = Network { mode: NetworkMode::SshTunnel, hops: vec![hop.clone()] };
-    let r = Session::test(profile(Engine::Postgres, d, SslMode::Prefer, net), &ProfileSecrets::default()).await;
-    if let Some(Error::UnknownHostKey { host, port, key, .. }) = r.error.as_ref().map(Error::root) {
-        tunnel::trust_host_key(host, *port, key).unwrap();
-    }
 }
 
 /// Each failure is reported at the right step, with earlier steps ok and later ones skipped.
@@ -331,7 +394,7 @@ async fn test_reports_the_failing_step() {
     if let (Ok(key), Some(h2)) =
         (std::env::var("ONECLIENT_TEST_SSH_KEY"), hop_env("ONECLIENT_TEST_SSH2", SshAuth::Password))
     {
-        trust_host(&h2, &d).await;
+        replace_changed_key(&h2, &d).await;
         let mut s = pw(&d.password);
         s.hops.insert(h2.id, HopSecret { password: Some("wrong".into()), key_passphrase: None });
         let net = Network { mode: NetworkMode::SshTunnel, hops: vec![h2.clone()] };
@@ -339,7 +402,7 @@ async fn test_reports_the_failing_step() {
         assert!(failed(&r).starts_with("Sign in as"));
 
         let h1 = hop_env("ONECLIENT_TEST_SSH", SshAuth::KeyFile { path: key }).unwrap();
-        trust_host(&h1, &d).await;
+        replace_changed_key(&h1, &d).await;
         let mut s = pw(&d.password);
         let pass = std::env::var("ONECLIENT_TEST_SSH_KEY_PASS").ok().filter(|p| !p.is_empty());
         s.hops.insert(h1.id, HopSecret { password: None, key_passphrase: pass });
@@ -363,7 +426,7 @@ async fn opens_a_link() {
     assert_eq!(incoming.profile.name, "from a link");
     let secrets = ProfileSecrets { db_password: incoming.db_password.clone(), ..Default::default() };
     let s = Session::open(incoming.profile, &secrets).await.unwrap();
-    let out = s.run("SELECT current_database()").await.unwrap();
+    let out = s.run("SELECT current_database()", false).await.unwrap();
     assert_eq!(out.sets[0].rows[0][0].as_deref(), Some(d.db.as_str()));
 }
 
@@ -376,11 +439,11 @@ async fn edits_round_trip(engine: Engine, var: &str) {
     let mut p = profile(engine, &d, SslMode::Prefer, Network::default());
     let s = Session::open(p.clone(), &secrets).await.unwrap();
     let schema = if engine == Engine::Postgres { "public".to_string() } else { d.db.clone() };
-    s.run("DROP TABLE IF EXISTS oc_edit_test").await.unwrap();
-    s.run("CREATE TABLE oc_edit_test (id INT PRIMARY KEY, lang VARCHAR(20), note TEXT)").await.unwrap();
-    s.run("INSERT INTO oc_edit_test VALUES (1, 'de', 'x'), (2, 'de', NULL)").await.unwrap();
+    s.run("DROP TABLE IF EXISTS oc_edit_test", false).await.unwrap();
+    s.run("CREATE TABLE oc_edit_test (id INT PRIMARY KEY, lang VARCHAR(20), note TEXT)", false).await.unwrap();
+    s.run("INSERT INTO oc_edit_test VALUES (1, 'de', 'x'), (2, 'de', NULL)", false).await.unwrap();
 
-    let out = s.run("SELECT id, lang, note, 1 + 1 AS two FROM oc_edit_test ORDER BY id").await.unwrap();
+    let out = s.run("SELECT id, lang, note, 1 + 1 AS two FROM oc_edit_test ORDER BY id", false).await.unwrap();
     let cols = &out.sets[0].columns;
     let src = cols[1].source.as_ref().expect("lang has a source");
     assert_eq!(
@@ -398,16 +461,16 @@ async fn edits_round_trip(engine: Engine, var: &str) {
     };
     // Unchanged value still counts as one matched row; quotes and backslashes survive.
     assert_eq!(s.apply_edits(&[row("1", r"it's \en"), row("2", "de")]).await.unwrap(), 2);
-    let out = s.run("SELECT lang, note FROM oc_edit_test ORDER BY id").await.unwrap();
+    let out = s.run("SELECT lang, note FROM oc_edit_test ORDER BY id", false).await.unwrap();
     assert_eq!(out.sets[0].rows[0], vec![Some(r"it's \en".into()), None]);
 
     // Row 99 doesn't exist: nothing is saved, row 1 keeps its value.
     let err = s.apply_edits(&[row("1", "fr"), row("99", "fr")]).await.unwrap_err().to_string();
     assert!(err.contains("no longer exists"), "{err}");
-    let out = s.run("SELECT lang FROM oc_edit_test WHERE id = 1").await.unwrap();
+    let out = s.run("SELECT lang FROM oc_edit_test WHERE id = 1", false).await.unwrap();
     assert_eq!(out.sets[0].rows[0][0].as_deref(), Some(r"it's \en"));
 
-    s.run("DROP TABLE oc_edit_test").await.unwrap();
+    s.run("DROP TABLE oc_edit_test", false).await.unwrap();
     p.read_only = true;
     let ro = Session::open(p, &secrets).await.unwrap();
     assert!(ro.apply_edits(&[row("1", "x")]).await.unwrap_err().to_string().contains("read-only"));
@@ -423,4 +486,102 @@ async fn postgres_edits() {
 #[ignore]
 async fn mysql_edits() {
     edits_round_trip(Engine::Mysql, "ONECLIENT_TEST_MYSQL").await;
+}
+
+/// The server ends the session between statements, and while one runs: the connection is opened
+/// again, a read runs again, and a write is not sent twice.
+async fn server_ends_the_session(engine: Engine, var: &str) {
+    let Some(d) = db_env(var) else { return eprintln!("skip: {var}") };
+    let secrets = ProfileSecrets { db_password: Some(d.password.clone()), ..Default::default() };
+    let p = profile(engine, &d, SslMode::Prefer, Network::default());
+    let s = Session::open(p.clone(), &secrets).await.unwrap();
+    let admin = &Session::open(p, &secrets).await.unwrap();
+    let end = |id: String| async move {
+        let sql = match engine {
+            Engine::Postgres => format!("SELECT pg_terminate_backend({id})"),
+            Engine::Mysql => format!("KILL {id}"),
+        };
+        admin.run(&sql, false).await.unwrap();
+    };
+
+    let first = connection_id(&s).await;
+    end(first.clone()).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_ne!(connection_id(&s).await, first);
+    assert!(s.take_reconnected());
+
+    let slow = match engine {
+        Engine::Postgres => "SELECT pg_sleep(2)",
+        Engine::Mysql => "SELECT SLEEP(2)",
+    };
+    for rerun in [true, false] {
+        let id = connection_id(&s).await;
+        let ending = async {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            end(id).await;
+        };
+        let (result, ()) = tokio::join!(s.run(slow, rerun), ending);
+        match rerun {
+            true => assert!(result.is_ok(), "a read runs again: {result:?}"),
+            false => assert!(matches!(result, Err(Error::Interrupted)), "a write is not sent twice: {result:?}"),
+        }
+    }
+    connection_id(&s).await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn postgres_server_ends_the_session() {
+    server_ends_the_session(Engine::Postgres, "ONECLIENT_TEST_PG").await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn mysql_server_ends_the_session() {
+    server_ends_the_session(Engine::Mysql, "ONECLIENT_TEST_MYSQL").await;
+}
+
+/// After sleep, connections look open but carry nothing. The next statement finds out with a
+/// ping, before it is sent, and runs on a new connection. Takes over 30 seconds.
+#[tokio::test]
+#[ignore]
+async fn reconnects_after_sleep() {
+    let Some(d) = db_env("ONECLIENT_TEST_PG") else { return eprintln!("skip: ONECLIENT_TEST_PG") };
+    let secrets = ProfileSecrets { db_password: Some(d.password.clone()), ..Default::default() };
+    let proxy = Proxy::start(&d.host, d.port, 0).await;
+    let mut p = profile(Engine::Postgres, &d, SslMode::Prefer, Network::default());
+    (p.host, p.port) = ("127.0.0.1".into(), proxy.port);
+    let s = Session::open(p, &secrets).await.unwrap();
+    let first = connection_id(&s).await;
+
+    proxy.freeze();
+    tokio::time::sleep(Duration::from_secs(31)).await;
+    let started = Instant::now();
+    let out = s.run("SELECT pg_backend_pid()", false).await.unwrap();
+    eprintln!("found the dead connection and opened a new one in {:?}", started.elapsed());
+    assert_ne!(out.sets[0].rows[0][0].as_deref(), Some(first.as_str()));
+    assert!(s.take_reconnected());
+}
+
+/// The SSH connection drops (another network, the server restarted): the tunnel is opened again.
+#[tokio::test]
+#[ignore]
+async fn reconnects_when_the_ssh_connection_drops() {
+    let Some(d) = db_env("ONECLIENT_TEST_PG") else { return eprintln!("skip: ONECLIENT_TEST_PG") };
+    let Ok(key) = std::env::var("ONECLIENT_TEST_SSH_KEY") else { return eprintln!("skip: ONECLIENT_TEST_SSH_KEY") };
+    let Some(mut hop) = hop_env("ONECLIENT_TEST_SSH", SshAuth::KeyFile { path: key }) else { return };
+    // A fixed port, so known_hosts keeps one entry for it.
+    let proxy = Proxy::start(&hop.host, hop.port, 62222).await;
+    (hop.host, hop.port) = ("127.0.0.1".into(), proxy.port);
+    let mut secrets = ProfileSecrets { db_password: Some(d.password.clone()), ..Default::default() };
+    let pass = std::env::var("ONECLIENT_TEST_SSH_KEY_PASS").ok().filter(|p| !p.is_empty());
+    secrets.hops.insert(hop.id, HopSecret { password: None, key_passphrase: pass });
+    let net = Network { mode: NetworkMode::SshTunnel, hops: vec![hop] };
+    let s = open_ssh(profile(Engine::Postgres, &d, SslMode::Prefer, net), &secrets).await;
+    let first = connection_id(&s).await;
+
+    proxy.cut();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_ne!(connection_id(&s).await, first);
+    assert!(s.take_reconnected());
 }

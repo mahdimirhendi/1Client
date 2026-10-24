@@ -1,6 +1,7 @@
 // A small in-memory backend so the UI runs in a normal browser (`npm run dev`) for design work
 // and screenshots. Never used inside the Tauri app. All data is made up.
 import type {
+  AppError,
   Canvas,
   ColumnMeta,
   ConnectionProfile,
@@ -379,6 +380,24 @@ let environments = [
   { id: "demo", name: "Customer demo", color: "#8E4EC6", confirmWrites: true },
 ];
 
+/** In the mock, an SSH host named rebuilt.example.com sends a new key until it is replaced. */
+let rebuiltReplaced = false;
+function keyChanged(p: ConnectionProfile): AppError | null {
+  const hop = p.network.mode === "direct" ? undefined : p.network.hops.find((h) => h.host === "rebuilt.example.com");
+  if (!hop || rebuiltReplaced) return null;
+  const fingerprint = "SHA256:dGhlIHNlcnZlciB3YXMgcmVidWlsdA";
+  return {
+    kind: "hostKeyChanged",
+    message: `${hop.host}:${hop.port} sent key ${fingerprint}, which does not match ~/.ssh/known_hosts line 12.`,
+    step: `Verify host key of ${hop.host}`,
+    hint: "If the server was rebuilt or reinstalled, replace the old key. If you don't know why it changed, don't connect: someone may be intercepting the connection.",
+    host: hop.host,
+    port: hop.port,
+    fingerprint,
+    key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKBxUWKEwcouxtksE8aGUUdx7FYOyBn4tUQlurbvM4/i",
+  };
+}
+
 /** Diagram canvases by connection; none until a connection's diagram is first opened. */
 const canvases = new Map<string, Canvas[]>();
 
@@ -405,6 +424,14 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
     case "test_connection": {
       const p = args.profile as ConnectionProfile;
       const hops = p.network.mode === "direct" ? [] : p.network.mode === "sshTunnel" ? p.network.hops.slice(0, 1) : p.network.hops;
+      const changed = keyChanged(p);
+      if (changed) {
+        const steps: TestReport["steps"] = [
+          { label: `Reach ${changed.host}:${changed.port}`, status: "ok", ms: 40 },
+          { label: changed.step!, status: "failed", detail: changed.message, hint: changed.hint, ms: 30 },
+        ];
+        return { ok: false, steps, serverVersion: null, hops: hops.length, elapsedMs: 70, error: changed } satisfies TestReport as T;
+      }
       const steps: TestReport["steps"] = [];
       hops.forEach((h, i) => {
         steps.push({ label: i ? `Reach ${h.host}:${h.port} through ${hops[i - 1].host}` : `Reach ${h.host}:${h.port}`, status: "ok", ms: 40 });
@@ -432,6 +459,8 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
     }
     case "open_session": {
       const p = profiles.find((x) => x.id === args.profileId)!;
+      const changed = keyChanged(p);
+      if (changed) throw { ...changed, message: `${changed.step}: ${changed.message}` };
       const sessionId = crypto.randomUUID();
       sessions.set(sessionId, p.id);
       return {
@@ -459,6 +488,9 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
     case "save_environments":
       environments = args.list as typeof environments;
       return environments as T;
+    case "replace_host_key":
+      rebuiltReplaced = true;
+      return undefined as T;
     case "take_pending_links":
     case "take_startup_problems":
       return [] as T;

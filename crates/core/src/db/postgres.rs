@@ -113,6 +113,12 @@ impl PgConn {
         self.client.is_closed()
     }
 
+    /// An empty query: answered even inside a failed transaction, and changes nothing.
+    pub(crate) async fn ping(&self) -> Result<()> {
+        self.client.simple_query("").await?;
+        Ok(())
+    }
+
     /// Run one or more statements with the simple query protocol (values come back as text).
     /// Rows are read as they arrive, so only the first `ROW_LIMIT` of each set are kept in memory.
     pub(crate) async fn run(&self, sql: &str) -> Result<Vec<ResultSet>> {

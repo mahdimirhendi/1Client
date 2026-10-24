@@ -9,6 +9,7 @@ import { showToast } from "../lib/toast";
 import { useApp, type ConnTab, type DocTab } from "../store";
 import type { AppError, ResultSet } from "../types";
 import { openMenu } from "./ContextMenu";
+import { ReplaceHostKey } from "./ReplaceHostKey";
 import { exact } from "../lib/input";
 
 type View = "table" | "json";
@@ -102,7 +103,11 @@ export function Results({ conn, doc }: { conn: ConnTab; doc: DocTab }) {
       </div>
 
       {doc.error ? (
-        <ErrorView error={doc.error} sql={doc.lastRun} />
+        <ErrorView
+          error={doc.error}
+          sql={doc.lastRun}
+          onRetry={() => doc.lastRun && useApp.getState().run(conn.id, doc.id, doc.lastRun, doc.kind === "table")}
+        />
       ) : !current ? (
         <div className="empty">{doc.running ? "Running…" : "Run a statement with ⌘↵ to see results here."}</div>
       ) : current.columns.length === 0 ? (
@@ -662,7 +667,7 @@ function JsonView({ set }: { set: ResultSet }) {
 }
 
 /** The server's error as it sent it: code, SQLSTATE, message, detail, hint, and where. */
-function ErrorView({ error, sql }: { error: AppError; sql?: string }) {
+function ErrorView({ error, sql, onRetry }: { error: AppError; sql?: string; onRetry: () => void }) {
   const db = error.db;
   const code = db
     ? db.engine === "mysql"
@@ -681,7 +686,7 @@ function ErrorView({ error, sql }: { error: AppError; sql?: string }) {
   const full = [
     db ? `${code}: ${db.message}` : error.message,
     db?.detail && `DETAIL: ${db.detail}`,
-    db?.hint && `HINT: ${db.hint}`,
+    (db?.hint ?? error.hint) && `HINT: ${db?.hint ?? error.hint}`,
     where && `LINE ${where.line}: ${where.text}`,
   ]
     .filter(Boolean)
@@ -698,11 +703,12 @@ function ErrorView({ error, sql }: { error: AppError; sql?: string }) {
             <span>Detail</span> {db.detail}
           </div>
         )}
-        {db?.hint && (
+        {(db?.hint ?? error.hint) && (
           <div className="error-field">
-            <span>Hint</span> {db.hint}
+            <span>Hint</span> {db?.hint ?? error.hint}
           </div>
         )}
+        <ReplaceHostKey error={error} onReplaced={onRetry} />
         {where ? (
           <pre className="error-where mono">
             {`LINE ${where.line}: ${where.text}\n${" ".repeat(`LINE ${where.line}: `.length + where.col - 1)}^`}
