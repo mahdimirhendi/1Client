@@ -313,10 +313,16 @@ async fn postgres_through_ssh_tunnel() {
     secrets.hops.insert(hop.id, HopSecret { password: None, key_passphrase: pass });
 
     let net = Network { mode: NetworkMode::SshTunnel, hops: vec![hop] };
-    let s = open_ssh(profile(Engine::Postgres, &d, SslMode::Require, net), &secrets).await;
+    let p = profile(Engine::Postgres, &d, SslMode::Require, net);
+    let s = open_ssh(p.clone(), &secrets).await;
     assert_eq!(s.info().hops, 1);
     let out = s.run("SELECT current_database()", false).await.unwrap();
     assert_eq!(out.sets[0].rows[0][0].as_deref(), Some(d.db.as_str()));
+
+    // Browsing from the form and switching databases work through the tunnel too.
+    assert!(Session::list_databases(&p, &secrets).await.unwrap().contains(&"postgres".to_string()));
+    let info = s.use_database("postgres").await.unwrap();
+    assert_eq!((info.database.as_str(), info.hops), ("postgres", 1));
 }
 
 #[tokio::test]
@@ -584,4 +590,74 @@ async fn reconnects_when_the_ssh_connection_drops() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_ne!(connection_id(&s).await, first);
     assert!(s.take_reconnected());
+}
+
+/// The form lists the databases (also when the one typed there doesn't exist), and an open session
+/// switches between them: it stays in the new one after a reconnect, and a failed switch changes nothing.
+async fn databases_list_and_switch(engine: Engine, var: &str) {
+    let Some(d) = db_env(var) else { return eprintln!("skip: {var}") };
+    let secrets = ProfileSecrets { db_password: Some(d.password.clone()), ..Default::default() };
+    let p = profile(engine, &d, SslMode::Prefer, Network::default());
+    let admin = Session::open(p.clone(), &secrets).await.unwrap();
+    let (create, drop) = match engine {
+        Engine::Postgres => ("CREATE DATABASE oc_other", "DROP DATABASE IF EXISTS oc_other WITH (FORCE)"),
+        Engine::Mysql => ("CREATE DATABASE oc_other", "DROP DATABASE IF EXISTS oc_other"),
+    };
+    admin.run(drop, false).await.unwrap();
+    if let Err(e) = admin.run(create, false).await {
+        return eprintln!("skip: {} can't create a database ({e})", d.user);
+    }
+
+    let listed = Session::list_databases(&p, &secrets).await.unwrap();
+    eprintln!("databases: {listed:?}");
+    assert!(listed.contains(&d.db) && listed.contains(&"oc_other".to_string()));
+    let system = ["template0", "template1", "mysql", "sys", "information_schema", "performance_schema"];
+    assert!(!listed.iter().any(|n| system.contains(&n.as_str())), "system databases are left out");
+    let typo = ConnectionProfile { database: "does_not_exist".into(), ..p.clone() };
+    assert_eq!(Session::list_databases(&typo, &secrets).await.unwrap(), listed, "a database that doesn't exist");
+
+    let s = Session::open(p, &secrets).await.unwrap();
+    assert_eq!(s.info().database, d.db);
+    assert_eq!(s.databases().await.unwrap(), listed);
+    assert_eq!(s.use_database("oc_other").await.unwrap().database, "oc_other");
+    s.run("CREATE TABLE oc_marker (id INT PRIMARY KEY)", false).await.unwrap();
+    let marker = |tables: Vec<TableInfo>| tables.into_iter().find(|t| t.name == "oc_marker").map(|t| t.schema);
+    let schema = marker(s.introspect().await.unwrap()).expect("the new database's table");
+    if engine == Engine::Mysql {
+        assert_eq!(schema, "oc_other");
+    }
+
+    // A reconnect opens the database switched to, not the saved one.
+    let id = connection_id(&s).await;
+    let end = match engine {
+        Engine::Postgres => format!("SELECT pg_terminate_backend({id})"),
+        Engine::Mysql => format!("KILL {id}"),
+    };
+    admin.run(&end, false).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_ne!(connection_id(&s).await, id);
+    assert_eq!(s.info().database, "oc_other");
+
+    let err = s.use_database("does_not_exist").await.unwrap_err();
+    eprintln!("{err}");
+    assert_eq!(s.info().database, "oc_other", "a failed switch keeps the database");
+    s.run("SELECT 1", false).await.unwrap();
+
+    assert_eq!(s.use_database(&d.db).await.unwrap().database, d.db);
+    if engine == Engine::Postgres {
+        assert_eq!(marker(s.introspect().await.unwrap()), None, "each PostgreSQL database has its own tables");
+    }
+    admin.run(drop, false).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore]
+async fn postgres_databases() {
+    databases_list_and_switch(Engine::Postgres, "ONECLIENT_TEST_PG").await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn mysql_databases() {
+    databases_list_and_switch(Engine::Mysql, "ONECLIENT_TEST_MYSQL").await;
 }

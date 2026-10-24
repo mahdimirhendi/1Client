@@ -1,10 +1,14 @@
 import { useRef, useState } from "react";
+import { api } from "../api";
+import { showToast } from "../lib/toast";
 import { useApp, type ConnTab, type DocTab } from "../store";
+import type { AppError } from "../types";
 import { ConnectionTabs } from "./ConnectionTabs";
+import { openMenuBelow, type MenuItem } from "./ContextMenu";
 import { Diagram } from "./Diagram";
 import { DocTabs } from "./DocTabs";
 import { FilterBar } from "./FilterBar";
-import { IconDatabase, IconPlay } from "./Icons";
+import { IconChevron, IconDatabase, IconPlay } from "./Icons";
 import { QueryEditor, runActive, useEditorStatus } from "./QueryEditor";
 import { Results } from "./Results";
 import { Sidebar } from "./Sidebar";
@@ -101,6 +105,49 @@ function NoTabs({ connId }: { connId: string }) {
   );
 }
 
+/** The database the tab is in; click to pick another one on the same server. */
+function DatabaseSwitcher({ conn }: { conn: ConnTab }) {
+  const [opening, setOpening] = useState<string | null>(null);
+  const [listing, setListing] = useState(false);
+  const mysql = conn.profile.engine === "mysql";
+
+  const switchTo = async (database: string) => {
+    setOpening(database);
+    await useApp.getState().useDatabase(conn.id, database);
+    setOpening(null);
+  };
+  const pick = async (button: HTMLElement) => {
+    if (listing || opening !== null) return;
+    setListing(true);
+    try {
+      const names = await api.sessionDatabases(conn.id);
+      const items: MenuItem[] = names.map((n) => ({ label: n, checked: n === conn.database, action: () => switchTo(n) }));
+      // MySQL can also work without a default database; the sidebar then shows all of them.
+      if (mysql) items.unshift({ label: "All databases", checked: !conn.database, action: () => switchTo("") }, "separator");
+      openMenuBelow(button, items, names.length > 10);
+    } catch (e) {
+      showToast(`Couldn't list the databases: ${(e as AppError).message}`, "error");
+    } finally {
+      setListing(false);
+    }
+  };
+
+  const shown = opening ?? conn.database;
+  return (
+    <button
+      className="db-switcher"
+      title="Switch to another database on this server"
+      aria-label={`Database ${shown || "none"}. Switch database`}
+      aria-busy={listing || opening !== null}
+      onClick={(e) => pick(e.currentTarget)}
+    >
+      <IconDatabase color="var(--label-secondary)" />
+      <span className={opening !== null ? "muted" : undefined}>{opening !== null ? `Opening ${shown || "all databases"}…` : shown || "All databases"}</span>
+      <IconChevron open />
+    </button>
+  );
+}
+
 function Toolbar({ conn, doc }: { conn: ConnTab; doc?: DocTab }) {
   const { toggleEditor, run, temporary, saveTemporary, setView, refreshSchema } = useApp();
   const diagram = conn.view === "diagram";
@@ -118,8 +165,7 @@ function Toolbar({ conn, doc }: { conn: ConnTab; doc?: DocTab }) {
     <header className="toolbar" data-tauri-drag-region>
       <div className="traffic-space" data-tauri-drag-region />
       <div className="toolbar-db">
-        <IconDatabase color="var(--label-secondary)" />
-        <span>{conn.profile.database || conn.profile.user}</span>
+        <DatabaseSwitcher conn={conn} />
         <span className="muted">·</span>
         <span className="muted">{conn.info.serverVersion}</span>
       </div>

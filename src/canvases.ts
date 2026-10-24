@@ -27,26 +27,43 @@ export interface SaveStatus {
 /** The New / Edit Canvas sheet. `root` is the table to suggest for "A table and its neighbours". */
 export type CanvasSheet = { connId: string; mode: "new"; root?: string } | { connId: string; mode: "edit"; canvasId: string };
 
-interface ProfileCanvases {
-  /** `null` when the connection never had a canvas; a "Whole database" one is made when it is first shown. */
+/**
+ * Where canvases belong: a connection's database on PostgreSQL, where each database has its own;
+ * on MySQL one set covers every database the connection shows.
+ */
+interface Place {
+  profileId: string;
+  database: string;
+}
+
+const placeOf = (conn: ConnTab): Place => ({
+  profileId: conn.profile.id,
+  database: conn.profile.engine === "postgres" ? conn.database : "",
+});
+const keyOf = (place: Place) => `${place.profileId}/${place.database}`;
+/** Key of `byPlace` for a connection tab. */
+export const placeKey = (conn: ConnTab) => keyOf(placeOf(conn));
+
+interface PlaceCanvases {
+  /** `null` when there never was a canvas here; a "Whole database" one is made when it is first shown. */
   list: Canvas[] | null;
   active: string | null;
 }
 
 interface CanvasState {
-  /** By connection profile id: tabs of the same connection share their canvases. */
-  byProfile: Record<string, ProfileCanvases>;
+  /** By `placeKey`: tabs of the same connection and database share their canvases. */
+  byPlace: Record<string, PlaceCanvases>;
   /** By canvas id. */
   saves: Record<string, SaveStatus>;
   sheet: CanvasSheet | null;
   /** A canvas that was just made: zoom it to fit when it is shown. */
   fit: string | null;
 
-  /** Read the connection's canvases, the first time only: after that this window holds the latest. */
+  /** Read the canvases of the connection's database, the first time only: after that this window holds the latest. */
   load(conn: ConnTab): Promise<void>;
   /** Put new tables on the canvases that add them by themselves (after the schema was read again). */
   sync(conn: ConnTab): void;
-  /** Start a "Whole database" canvas for a connection that never had one. */
+  /** Start a "Whole database" canvas where there never was one. */
   ensure(conn: ConnTab, temporary: boolean): void;
   create(conn: ConnTab, spec: CanvasSpec): void;
   edit(conn: ConnTab, id: string, spec: CanvasSpec): void;
@@ -65,9 +82,9 @@ interface CanvasState {
   clearFit(): void;
 }
 
-const timers = new Map<string, { timer: ReturnType<typeof setTimeout>; profileId: string; loud: boolean }>();
+const timers = new Map<string, { timer: ReturnType<typeof setTimeout>; place: Place; loud: boolean }>();
 const queues = new Map<string, Promise<void>>();
-/** Connections whose canvases were read. This window is the only one that changes them, so the list in
+/** Places whose canvases were read. This window is the only one that changes them, so the list in
  * memory stays the latest; reading again could undo changes that are not saved yet. */
 const loaded = new Set<string>();
 
@@ -83,16 +100,17 @@ function copyName(name: string, list: Canvas[]): string {
 }
 
 export const useCanvases = create<CanvasState>((set, get) => {
-  const listOf = (profileId: string) => get().byProfile[profileId]?.list ?? null;
-  const find = (profileId: string, id: string) => listOf(profileId)?.find((c) => c.id === id);
+  const listOf = (place: Place) => get().byPlace[keyOf(place)]?.list ?? null;
+  const find = (place: Place, id: string) => listOf(place)?.find((c) => c.id === id);
 
-  const setList = (profileId: string, change: (list: Canvas[]) => Canvas[], active?: string | null) =>
+  const setList = (place: Place, change: (list: Canvas[]) => Canvas[], active?: string | null) =>
     set((s) => {
-      const cur = s.byProfile[profileId] ?? { list: null, active: null };
+      const key = keyOf(place);
+      const cur = s.byPlace[key] ?? { list: null, active: null };
       return {
-        byProfile: {
-          ...s.byProfile,
-          [profileId]: { list: change(cur.list ?? []), active: active === undefined ? cur.active : active },
+        byPlace: {
+          ...s.byPlace,
+          [key]: { list: change(cur.list ?? []), active: active === undefined ? cur.active : active },
         },
       };
     });
@@ -100,12 +118,12 @@ export const useCanvases = create<CanvasState>((set, get) => {
   const setStatus = (id: string, status: SaveStatus) => set((s) => ({ saves: { ...s.saves, [id]: status } }));
 
   /** Save one canvas as it is now; saves of the same canvas run one after the other. */
-  const persist = (profileId: string, canvas: Canvas, loud: boolean) => {
+  const persist = (place: Place, canvas: Canvas, loud: boolean) => {
     if (loud) setStatus(canvas.id, { state: "saving", at: get().saves[canvas.id]?.at ?? 0 });
     const run = async () => {
       try {
-        const saved = await api.saveCanvas(profileId, canvas);
-        setList(profileId, (list) =>
+        const saved = await api.saveCanvas(place.profileId, place.database, canvas);
+        setList(place, (list) =>
           list.map((c) => (c.id === saved.id ? { ...c, createdAt: saved.createdAt, updatedAt: saved.updatedAt } : c)),
         );
         if (loud || get().saves[canvas.id]?.state !== "saved") setStatus(canvas.id, { state: "saved", at: Date.now() });
@@ -118,91 +136,96 @@ export const useCanvases = create<CanvasState>((set, get) => {
     void next.finally(() => queues.get(canvas.id) === next && queues.delete(canvas.id));
   };
 
-  const schedule = (profileId: string, id: string, loud: boolean) => {
+  const schedule = (place: Place, id: string, loud: boolean) => {
     const pending = timers.get(id);
     if (pending) clearTimeout(pending.timer);
     const isLoud = loud || !!pending?.loud;
     if (isLoud) setStatus(id, { state: "saving", at: get().saves[id]?.at ?? 0 });
     const timer = setTimeout(() => {
       timers.delete(id);
-      const latest = find(profileId, id);
-      if (latest) persist(profileId, latest, isLoud);
+      const latest = find(place, id);
+      if (latest) persist(place, latest, isLoud);
     }, SAVE_DELAY);
-    timers.set(id, { timer, profileId, loud: isLoud });
+    timers.set(id, { timer, place, loud: isLoud });
   };
 
-  const replace = (profileId: string, canvas: Canvas) =>
-    setList(profileId, (list) => list.map((c) => (c.id === canvas.id ? canvas : c)));
+  const replace = (place: Place, canvas: Canvas) =>
+    setList(place, (list) => list.map((c) => (c.id === canvas.id ? canvas : c)));
 
   return {
-    byProfile: {},
+    byPlace: {},
     saves: {},
     sheet: null,
     fit: null,
 
     async load(conn) {
-      const profileId = conn.profile.id;
-      if (loaded.has(profileId)) return get().sync(conn);
+      const place = placeOf(conn);
+      const key = keyOf(place);
+      if (loaded.has(key)) return get().sync(conn);
       try {
-        const read = await api.listCanvases(profileId);
-        loaded.add(profileId);
+        const read = await api.listCanvases(place.profileId, place.database);
+        loaded.add(key);
         set((s) => {
           // Canvases made here after a failed read are kept.
-          const here = (s.byProfile[profileId]?.list ?? []).filter((c) => !read?.some((r) => r.id === c.id));
+          const here = (s.byPlace[key]?.list ?? []).filter((c) => !read?.some((r) => r.id === c.id));
           const list = read || here.length ? [...(read ?? []), ...here] : null;
-          const prev = s.byProfile[profileId]?.active;
+          const prev = s.byPlace[key]?.active;
           const active = list?.some((c) => c.id === prev) ? prev! : (list?.[0]?.id ?? null);
-          return { byProfile: { ...s.byProfile, [profileId]: { list, active } } };
+          return { byPlace: { ...s.byPlace, [key]: { list, active } } };
         });
         get().sync(conn);
       } catch (e) {
-        set((s) => ({ byProfile: { ...s.byProfile, [profileId]: s.byProfile[profileId] ?? { list: [], active: null } } }));
+        set((s) => ({ byPlace: { ...s.byPlace, [key]: s.byPlace[key] ?? { list: [], active: null } } }));
         showToast(`Couldn't read the canvases: ${(e as AppError).message}`, "error");
       }
     },
 
     sync(conn) {
-      const list = listOf(conn.profile.id);
+      const place = placeOf(conn);
+      const list = listOf(place);
       if (!list || !conn.schema) return;
       const schema = indexSchema(conn.schema);
       for (const c of list) {
         const next = addNewTables(c, schema, changesOf(c, schema));
         if (next !== c) {
-          replace(conn.profile.id, next);
-          schedule(conn.profile.id, c.id, false);
+          replace(place, next);
+          schedule(place, c.id, false);
         }
       }
     },
 
     ensure(conn, temporary) {
-      const entry = get().byProfile[conn.profile.id];
+      const entry = get().byPlace[placeKey(conn)];
       if (temporary || !conn.schema || !entry || entry.list !== null) return;
       get().create(conn, { name: "Whole database", scope: { kind: "all" }, autoAdd: true });
     },
 
     create(conn, spec) {
       if (!conn.schema) return;
+      const place = placeOf(conn);
       const canvas = newCanvas(spec, indexSchema(conn.schema), uid());
-      setList(conn.profile.id, (list) => [...list, canvas], canvas.id);
+      setList(place, (list) => [...list, canvas], canvas.id);
       set({ fit: canvas.id });
-      persist(conn.profile.id, canvas, true);
+      persist(place, canvas, true);
     },
 
     edit(conn, id, spec) {
-      const c = find(conn.profile.id, id);
+      const place = placeOf(conn);
+      const c = find(place, id);
       if (!c || !conn.schema) return;
       const next = rescope(c, spec, indexSchema(conn.schema));
-      setList(conn.profile.id, (list) => list.map((x) => (x.id === id ? next : x)), id);
-      schedule(conn.profile.id, id, true);
+      setList(place, (list) => list.map((x) => (x.id === id ? next : x)), id);
+      schedule(place, id, true);
     },
 
     update(conn, id, change, opts) {
-      const c = find(conn.profile.id, id);
+      const place = placeOf(conn);
+      const c = find(place, id);
       if (!c) return;
       const next = change(c);
       if (next === c) return;
-      replace(conn.profile.id, next);
-      schedule(conn.profile.id, id, !opts?.quiet);
+      replace(place, next);
+      schedule(place, id, !opts?.quiet);
     },
 
     acknowledge(conn, id) {
@@ -210,21 +233,22 @@ export const useCanvases = create<CanvasState>((set, get) => {
     },
 
     open(conn, id) {
-      setList(conn.profile.id, (list) => list, id);
+      setList(placeOf(conn), (list) => list, id);
     },
 
     duplicate(conn, id) {
-      const list = listOf(conn.profile.id) ?? [];
+      const place = placeOf(conn);
+      const list = listOf(place) ?? [];
       const c = list.find((x) => x.id === id);
       if (!c) return;
       const copy = duplicate(c, uid(), copyName(c.name, list));
-      setList(conn.profile.id, (l) => [...l, copy], copy.id);
-      persist(conn.profile.id, copy, true);
+      setList(place, (l) => [...l, copy], copy.id);
+      persist(place, copy, true);
     },
 
     async remove(conn, id) {
-      const profileId = conn.profile.id;
-      const list = listOf(profileId) ?? [];
+      const place = placeOf(conn);
+      const list = listOf(place) ?? [];
       const i = list.findIndex((c) => c.id === id);
       if (i < 0) return;
       const canvas = list[i];
@@ -232,41 +256,38 @@ export const useCanvases = create<CanvasState>((set, get) => {
       if (pending) (clearTimeout(pending.timer), timers.delete(id));
       try {
         await (queues.get(id) ?? Promise.resolve());
-        await api.deleteCanvas(profileId, id);
+        await api.deleteCanvas(place.profileId, place.database, id);
       } catch (e) {
         showToast(`Couldn't delete the canvas: ${(e as AppError).message}`, "error");
         return;
       }
-      const rest = (listOf(profileId) ?? []).filter((c) => c.id !== id);
-      const active = get().byProfile[profileId]?.active;
-      setList(profileId, () => rest, active === id ? (rest[Math.min(i, rest.length - 1)]?.id ?? null) : active);
+      const rest = (listOf(place) ?? []).filter((c) => c.id !== id);
+      const active = get().byPlace[keyOf(place)]?.active;
+      setList(place, () => rest, active === id ? (rest[Math.min(i, rest.length - 1)]?.id ?? null) : active);
       showToast(`Deleted “${canvas.name}”`, "ok", {
         label: "Undo",
         run: () => {
-          setList(profileId, (l) => [...l.slice(0, i), canvas, ...l.slice(i)], canvas.id);
-          persist(profileId, canvas, true);
+          setList(place, (l) => [...l.slice(0, i), canvas, ...l.slice(i)], canvas.id);
+          persist(place, canvas, true);
         },
       });
     },
 
     flush(profileId) {
       for (const [id, p] of timers) {
-        if (p.profileId !== profileId) continue;
+        if (p.place.profileId !== profileId) continue;
         clearTimeout(p.timer);
         timers.delete(id);
-        const latest = find(profileId, id);
-        if (latest) persist(profileId, latest, p.loud);
+        const latest = find(p.place, id);
+        if (latest) persist(p.place, latest, p.loud);
       }
     },
 
     forget(profileId) {
-      loaded.delete(profileId);
-      for (const [id, p] of timers) if (p.profileId === profileId) (clearTimeout(p.timer), timers.delete(id));
-      set((s) => {
-        const byProfile = { ...s.byProfile };
-        delete byProfile[profileId];
-        return { byProfile };
-      });
+      const mine = (key: string) => key.startsWith(`${profileId}/`);
+      for (const key of loaded) if (mine(key)) loaded.delete(key);
+      for (const [id, p] of timers) if (p.place.profileId === profileId) (clearTimeout(p.timer), timers.delete(id));
+      set((s) => ({ byPlace: Object.fromEntries(Object.entries(s.byPlace).filter(([key]) => !mine(key))) }));
     },
 
     setSheet(sheet) {

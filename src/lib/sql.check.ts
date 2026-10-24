@@ -70,8 +70,8 @@ assert.equal(
 );
 
 // The schema listed first: public on PostgreSQL, the connection's database on MySQL.
-assert.equal(defaultSchema({ engine: "postgres", database: "shop" }), "public");
-assert.equal(defaultSchema({ engine: "mysql", database: "shop" }), "shop");
+assert.equal(defaultSchema("postgres", "shop"), "public");
+assert.equal(defaultSchema("mysql", "shop"), "shop");
 
 // Names offered when saving a query.
 assert.equal(queryName("-- Top customers by revenue\nSELECT 1"), "Top customers by revenue");

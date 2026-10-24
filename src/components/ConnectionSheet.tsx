@@ -15,6 +15,7 @@ import type {
   TestReport,
 } from "../types";
 import { envColors, useDarkMode } from "../lib/theme";
+import { openMenuBelow, type MenuItem } from "./ContextMenu";
 import { EngineBadge, IconCheck, IconEye, IconEyeOff, IconPlus } from "./Icons";
 import { ReplaceHostKey } from "./ReplaceHostKey";
 import { exact } from "../lib/input";
@@ -120,6 +121,7 @@ export function ConnectionSheet() {
   const [url, setUrl] = useState("");
   const [test, setTest] = useState<Test>({ state: "idle" });
   const [busy, setBusy] = useState(false);
+  const [browsing, setBrowsing] = useState(false);
 
   // Show saved 1Password references when editing (they are not secret; passwords never come back).
   useEffect(() => {
@@ -174,6 +176,23 @@ export function ConnectionSheet() {
       setTest({ state: "ok", report: await api.testConnection(finalProfile(), secrets) });
     } catch (e) {
       setTest({ state: "error", error: e as AppError });
+    }
+  };
+
+  /** List the server's databases with what is filled in, and pick one. */
+  const browse = async (button: HTMLElement) => {
+    if (browsing) return;
+    setBrowsing(true);
+    try {
+      const names = await api.listDatabases(finalProfile(), secrets);
+      const items: MenuItem[] = names.length
+        ? names.map((n) => ({ label: n, checked: n === p.database, action: () => update({ database: n }) }))
+        : [{ label: "No databases you can open", disabled: true, action: () => {} }];
+      openMenuBelow(button, items, names.length > 10);
+    } catch (e) {
+      setTest({ state: "error", error: e as AppError });
+    } finally {
+      setBrowsing(false);
     }
   };
 
@@ -308,6 +327,15 @@ export function ConnectionSheet() {
                       value={p.database}
                       onChange={(e) => update({ database: e.target.value })}
                     />
+                    <button
+                      type="button"
+                      className="btn tiny"
+                      title="Connect with these settings and list the databases"
+                      aria-busy={browsing}
+                      onClick={(e) => browse(e.currentTarget)}
+                    >
+                      {browsing ? "Listing…" : "Browse…"}
+                    </button>
                   </Row>
                   <Row label={p.engine === "postgres" ? "SSL mode" : "SSL"} last>
                     <select className="popup" value={p.sslMode} onChange={(e) => update({ sslMode: e.target.value as SslMode })}>

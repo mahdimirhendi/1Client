@@ -52,6 +52,10 @@ by a command-line tool.
   with `ssh-keygen -R` (which keeps `known_hosts.old`) and adds the new one.
 - **Sessions.** One connection tab is one `Session`: an optional tunnel plus a single database
   connection, so `USE`, session variables and transactions behave as typed. Closing the tab drops both.
+  Switching to another database opens a new database connection through the same tunnel; the saved
+  connection keeps its database. On PostgreSQL the table tabs of the old database close; on MySQL,
+  whose table tabs name their database, they stay, and the sidebar lists the chosen database only.
+  The connection form's Browse lists the databases the same way, with the form's values.
 - **Reconnecting.** When the connection drops (the Mac slept, the network changed, the server
   restarted), the session opens a new one by itself, tunnel included. Before a statement runs, a
   connection the driver or SSH already knows is closed is replaced; so is one that has been idle for
@@ -92,19 +96,21 @@ by a command-line tool.
   link until they are saved. Running the same SQL again moves it to the top instead of adding a copy,
   and each connection keeps its latest 500 runs. A file that can't be read is moved aside
   (`*.json.invalid`) rather than stopping the app.
-- **Diagram canvases.** A canvas stores only what the user chose and arranged: its scope (the whole
-  database, name patterns, picked tables, or a table and the tables up to two foreign keys away),
-  where each table sits, hidden tables and columns, notes, zoom, and the table and column names the
-  user last saw. It never stores the schema. Each time a canvas is shown it is rebuilt from the live
-  schema (`src/lib/diagram.ts`): new tables in scope are placed in free space (or wait unchecked in
-  its panel), dropped tables stay as placeholders until removed, and what changed since the last
-  look is listed until the user confirms it. Tables are keyed by `schema.table`. The layout puts
-  referenced tables to the left of the tables that reference them. Only cards and lines near the view
-  are drawn, and dragging one card leaves the others alone, so canvases of a thousand tables stay
-  smooth. Changes are saved 300 ms after the last one, in `diagrams/<connection id>.json`, written
-  atomically and removed with the connection; connections opened from a link keep none until saved.
-  Export draws the canvas from the model as SVG (or PNG from it), and the app writes the file where
-  the user picks in a native save panel, so the page never chooses a path.
+- **Diagram canvases.** On PostgreSQL each database of a connection has its own canvases; on MySQL,
+  where a connection sees every database, one set covers them all. A canvas stores only what the user
+  chose and arranged: its scope (the whole database, name patterns, picked tables, or a table and the
+  tables up to two foreign keys away), where each table sits, hidden tables and columns, notes, zoom,
+  and the table and column names the user last saw. It never stores the schema. Each time a canvas is
+  shown it is rebuilt from the live schema (`src/lib/diagram.ts`): new tables in scope are placed in
+  free space (or wait unchecked in its panel), dropped tables stay as placeholders until removed, and
+  what changed since the last look is listed until the user confirms it. Tables are keyed by
+  `schema.table`. The layout puts referenced tables to the left of the tables that reference them.
+  Only cards and lines near the view are drawn, and dragging one card leaves the others alone, so
+  canvases of a thousand tables stay smooth. Changes are saved 300 ms after the last one, in
+  `diagrams/<connection id>.json`, written atomically and removed with the connection; connections
+  opened from a link keep none until saved. Export draws the canvas from the model as SVG (or PNG from
+  it), and the app writes the file where the user picks in a native save panel, so the page never
+  chooses a path.
 - **Links.** `oneclient://open?url=…` and plain database URLs open a temporary connection, kept in
   memory with its password until the user saves it. Links are never logged and parse errors never
   contain the password.

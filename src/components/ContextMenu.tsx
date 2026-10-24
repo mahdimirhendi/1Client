@@ -1,18 +1,22 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { create } from "zustand";
 import { copyText, pasteText } from "../lib/clipboard";
+import { exact } from "../lib/input";
 
-export type MenuItem = { label: string; shortcut?: string; disabled?: boolean; action: () => void } | "separator";
+export type MenuItem =
+  | { label: string; shortcut?: string; disabled?: boolean; checked?: boolean; action: () => void }
+  | "separator";
 
 interface MenuState {
-  menu: { x: number; y: number; items: MenuItem[] } | null;
-  open(x: number, y: number, items: MenuItem[]): void;
+  /** `search`: a filter field above the items, for long lists. */
+  menu: { x: number; y: number; items: MenuItem[]; search?: boolean } | null;
+  open(x: number, y: number, items: MenuItem[], search?: boolean): void;
   close(): void;
 }
 
 export const useMenu = create<MenuState>((set) => ({
   menu: null,
-  open: (x, y, items) => set({ menu: { x, y, items } }),
+  open: (x, y, items, search) => set({ menu: { x, y, items, search } }),
   close: () => set({ menu: null }),
 }));
 
@@ -21,6 +25,12 @@ export function openMenu(e: React.MouseEvent | MouseEvent, items: MenuItem[]) {
   e.preventDefault();
   e.stopPropagation();
   useMenu.getState().open(e.clientX, e.clientY, items);
+}
+
+/** A menu under a button, like a macOS pop-up button. `search` adds a filter field for long lists. */
+export function openMenuBelow(el: HTMLElement, items: MenuItem[], search = false) {
+  const r = el.getBoundingClientRect();
+  useMenu.getState().open(r.left, r.bottom + 4, items, search);
 }
 
 /** Plain text fields get Cut / Copy / Paste / Select All, nothing else. */
@@ -46,6 +56,8 @@ export function ContextMenuHost() {
   const { menu, close } = useMenu();
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ x: 0, y: 0 });
+  const [query, setQuery] = useState("");
+  useEffect(() => setQuery(""), [menu]);
 
   // Never show the system menu; text fields get a short one.
   useEffect(() => {
@@ -84,9 +96,29 @@ export function ContextMenuHost() {
   }, [menu]);
 
   if (!menu) return null;
+  const q = query.trim().toLowerCase();
+  const items = q ? menu.items.filter((item) => item !== "separator" && item.label.toLowerCase().includes(q)) : menu.items;
+  const pick = (item: MenuItem) => {
+    if (item === "separator" || item.disabled) return;
+    close();
+    item.action();
+  };
   return (
     <div ref={ref} className="ctx-menu" role="menu" style={{ left: pos.x, top: pos.y }}>
-      {menu.items.map((item, i) =>
+      {menu.search && (
+        <input
+          {...exact}
+          className="ctx-search"
+          aria-label="Filter"
+          placeholder="Filter"
+          autoFocus
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && items[0] && pick(items[0])}
+        />
+      )}
+      {q && items.length === 0 && <div className="ctx-empty">No match</div>}
+      {items.map((item, i) =>
         item === "separator" ? (
           <div key={i} className="ctx-sep" role="separator" />
         ) : (
@@ -96,12 +128,12 @@ export function ContextMenuHost() {
             className="ctx-item"
             disabled={item.disabled}
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => {
-              close();
-              item.action();
-            }}
+            onClick={() => pick(item)}
           >
-            <span>{item.label}</span>
+            <span>
+              {item.checked !== undefined && <span className="ctx-check">{item.checked ? "✓" : ""}</span>}
+              {item.label}
+            </span>
             {item.shortcut && <span className="ctx-key">{item.shortcut}</span>}
           </button>
         ),

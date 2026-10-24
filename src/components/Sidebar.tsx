@@ -69,19 +69,22 @@ export function Sidebar({ conn }: { conn: ConnTab }) {
   };
 
   // Tables grouped by schema: the default one first (public on PostgreSQL), then the others in the
-  // order the server listed them (alphabetical).
+  // order the server listed them (alphabetical). On MySQL, where every database is a schema, only the
+  // chosen database is shown, like on PostgreSQL; all of them when none is chosen.
   const groups = useMemo(() => {
     const f = filter.trim().toLowerCase();
+    const only = conn.profile.engine === "mysql" && conn.database;
     const map = new Map<string, TableInfo[]>();
     for (const t of conn.schema ?? []) {
+      if (only && t.schema !== only) continue;
       if (f && !t.name.toLowerCase().includes(f)) continue;
       const list = map.get(t.schema);
       if (list) list.push(t);
       else map.set(t.schema, [t]);
     }
-    const first = defaultSchema(conn.profile);
+    const first = defaultSchema(conn.profile.engine, conn.database);
     return [...map.entries()].sort(([a], [b]) => Number(b === first) - Number(a === first));
-  }, [conn.schema, conn.profile, filter]);
+  }, [conn.schema, conn.profile.engine, conn.database, filter]);
 
   return (
     <aside className="sidebar">

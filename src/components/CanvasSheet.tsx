@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useCanvases, type CanvasSheet as SheetState } from "../canvases";
+import { placeKey, useCanvases, type CanvasSheet as SheetState } from "../canvases";
 import { displayName, indexSchema, inScope, parsePatterns } from "../lib/diagram";
 import { defaultSchema } from "../lib/sql";
 import { useApp } from "../store";
@@ -27,10 +27,10 @@ function suggestName(kind: Kind, patterns: string[], root: string, name: (k: str
 /** New Canvas, or Edit Canvas (name and scope) for an existing one. */
 export function CanvasSheet({ sheet }: { sheet: SheetState }) {
   const conn = useApp((s) => s.conns.find((c) => c.id === sheet.connId));
-  const { byProfile, setSheet, create, edit } = useCanvases();
-  const existing = sheet.mode === "edit" ? byProfile[conn?.profile.id ?? ""]?.list?.find((c) => c.id === sheet.canvasId) : undefined;
+  const { byPlace, setSheet, create, edit } = useCanvases();
+  const existing = sheet.mode === "edit" && conn ? byPlace[placeKey(conn)]?.list?.find((c) => c.id === sheet.canvasId) : undefined;
   const schema = useMemo(() => indexSchema(conn?.schema ?? []), [conn?.schema]);
-  const first = conn ? defaultSchema(conn.profile) : "";
+  const first = conn ? defaultSchema(conn.profile.engine, conn.database) : "";
   const name = (k: string) => displayName(k, first);
   const tables = useMemo(
     () => [...schema.keys()].sort((a, b) => Number(b.startsWith(first + ".")) - Number(a.startsWith(first + ".")) || a.localeCompare(b)),

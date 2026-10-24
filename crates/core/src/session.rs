@@ -23,7 +23,10 @@ const PING_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub struct Session {
     pub id: Uuid,
+    /// The saved settings. The database may have been switched since: see `database`.
     pub profile: ConnectionProfile,
+    /// The database to open: the saved one, or the one switched to.
+    database: Mutex<String>,
     /// Kept to connect again.
     secrets: ProfileSecrets,
     live: Mutex<Arc<Live>>,
@@ -39,16 +42,19 @@ pub struct Session {
 /// One opened connection.
 struct Live {
     server_version: String,
+    /// The database it is in, as the server says (PostgreSQL picks one when none was given).
+    database: String,
     db: DbConn,
-    // Declared after `db` so the database connection closes before the tunnel.
-    tunnel: Option<Tunnel>,
+    // Declared after `db` so the database connection closes before the tunnel. Switching databases
+    // reuses the tunnel.
+    tunnel: Option<Arc<Tunnel>>,
     /// A statement found it dropped.
     lost: AtomicBool,
 }
 
 impl Live {
     fn is_closed(&self) -> bool {
-        self.lost.load(Ordering::SeqCst) || self.db.is_closed() || self.tunnel.as_ref().is_some_and(Tunnel::is_closed)
+        self.lost.load(Ordering::SeqCst) || self.db.is_closed() || self.tunnel.as_ref().is_some_and(|t| t.is_closed())
     }
 
     /// The server answers a ping in time (an error from the server is an answer too).
@@ -76,6 +82,7 @@ impl Session {
         let live = Self::connect(&profile, secrets).await?;
         Ok(Self {
             id: Uuid::new_v4(),
+            database: Mutex::new(profile.database.clone()),
             profile,
             secrets: secrets.clone(),
             live: Mutex::new(Arc::new(live)),
@@ -88,14 +95,27 @@ impl Session {
 
     async fn connect(profile: &ConnectionProfile, secrets: &ProfileSecrets) -> Result<Live> {
         let mut steps = Steps::default();
-        Self::open_with(profile, secrets, &mut steps).await.map_err(|e| {
-            match steps.list.iter().find(|s| s.status == StepStatus::Failed) {
-                Some(failed) => {
-                    Error::Step { step: failed.label.clone(), hint: failed.hint.clone(), source: Box::new(e) }
-                }
-                None => e,
-            }
-        })
+        Self::open_with(profile, secrets, &mut steps).await.map_err(|e| at_failed_step(e, &steps))
+    }
+
+    /// The databases the server offers this user, for the connection form's Browse button: connect
+    /// with the form's values, list them, disconnect. When the database typed in the form can't be
+    /// opened, the server's default one is used for the listing.
+    pub async fn list_databases(profile: &ConnectionProfile, secrets: &ProfileSecrets) -> Result<Vec<String>> {
+        let mut steps = Steps::default();
+        let tunnel = Self::reach(profile, secrets, &mut steps).await.map_err(|e| at_failed_step(e, &steps))?;
+        let mut live = Self::sign_in(profile, secrets, &mut steps, tunnel.clone()).await;
+        let fallback = match profile.engine {
+            Engine::Postgres => "postgres",
+            Engine::Mysql => "",
+        };
+        if matches!(live, Err(Error::DbConnect { stage: DbStage::Database, .. })) && profile.database != fallback {
+            let other = ConnectionProfile { database: fallback.into(), ..profile.clone() };
+            steps = Steps::default();
+            live = Self::sign_in(&other, secrets, &mut steps, tunnel).await;
+        }
+        let live = live.map_err(|e| at_failed_step(e, &steps))?;
+        Ok(names(&live.db.run(db::databases_sql(profile.engine)).await?))
     }
 
     /// Connect step by step, recording each one, then disconnect.
@@ -123,6 +143,16 @@ impl Session {
     }
 
     async fn open_with(profile: &ConnectionProfile, secrets: &ProfileSecrets, steps: &mut Steps) -> Result<Live> {
+        let tunnel = Self::reach(profile, secrets, steps).await?;
+        Self::sign_in(profile, secrets, steps, tunnel).await
+    }
+
+    /// Reach the database server: open the SSH tunnel, or check that it answers directly.
+    async fn reach(
+        profile: &ConnectionProfile,
+        secrets: &ProfileSecrets,
+        steps: &mut Steps,
+    ) -> Result<Option<Arc<Tunnel>>> {
         if profile.host.trim().is_empty() {
             return Err(Error::Config("Enter the database host first".into()));
         }
@@ -133,7 +163,7 @@ impl Session {
             .map(|h| (h.clone(), secrets.hops.get(&h.id).cloned().unwrap_or_else(HopSecret::default)))
             .collect();
 
-        let tunnel = if hops.is_empty() {
+        if hops.is_empty() {
             let (h, p) = (profile.host.as_str(), profile.port);
             steps
                 .run(
@@ -148,10 +178,21 @@ impl Session {
                     |_| Some("Check the host and port, and that your network or VPN can reach it. If the database is only reachable from a server, connect through SSH.".into()),
                 )
                 .await?;
-            None
+            Ok(None)
         } else {
-            Some(tunnel::open(&hops, &profile.host, profile.port, steps).await?)
-        };
+            // Boxed, like the drivers below: these futures are large, and nested they could overflow a
+            // worker thread's stack in debug builds.
+            Ok(Some(Arc::new(Box::pin(tunnel::open(&hops, &profile.host, profile.port, steps)).await?)))
+        }
+    }
+
+    /// Sign in to the database, through `tunnel` when there is one.
+    async fn sign_in(
+        profile: &ConnectionProfile,
+        secrets: &ProfileSecrets,
+        steps: &mut Steps,
+        tunnel: Option<Arc<Tunnel>>,
+    ) -> Result<Live> {
         let (host, port) = match &tunnel {
             Some(t) => ("127.0.0.1", t.local_port),
             None => (profile.host.as_str(), profile.port),
@@ -161,9 +202,11 @@ impl Session {
         let sign_in = label::db_sign_in(steps::engine_name(profile.engine), &profile.user);
         let connected = match profile.engine {
             Engine::Postgres => {
-                db::postgres::connect(profile, pw, (host, port)).await.map(|(c, v)| (DbConn::Postgres(c), v))
+                Box::pin(db::postgres::connect(profile, pw, (host, port))).await.map(|(c, v)| (DbConn::Postgres(c), v))
             }
-            Engine::Mysql => db::mysql::connect(profile, pw, (host, port)).await.map(|(c, v)| (DbConn::Mysql(c), v)),
+            Engine::Mysql => {
+                Box::pin(db::mysql::connect(profile, pw, (host, port))).await.map(|(c, v)| (DbConn::Mysql(c), v))
+            }
         };
         let (db, server_version) = match connected {
             Ok(ok) => ok,
@@ -190,7 +233,8 @@ impl Session {
             steps.ok(label::db_open(&profile.database), None);
         }
 
-        Ok(Live { server_version, db, tunnel, lost: AtomicBool::new(false) })
+        let database = names(&db.run(db::current_database_sql(profile.engine)).await?).pop().unwrap_or_default();
+        Ok(Live { server_version, database, db, tunnel, lost: AtomicBool::new(false) })
     }
 
     pub fn info(&self) -> SessionInfo {
@@ -199,8 +243,33 @@ impl Session {
             session_id: self.id,
             profile_id: self.profile.id,
             server_version: live.server_version.clone(),
+            database: live.database.clone(),
             hops: if live.tunnel.is_some() { self.profile.network.active_hops().len() } else { 0 },
         }
+    }
+
+    /// The databases on the server this user can open, system ones left out.
+    pub async fn databases(&self) -> Result<Vec<String>> {
+        Ok(names(&self.run(db::databases_sql(self.profile.engine), true).await?.sets))
+    }
+
+    /// Work in another database from now on. The SSH tunnel is reused; the database connection is
+    /// new, so it starts a fresh session. On failure the current database stays.
+    pub async fn use_database(&self, name: &str) -> Result<SessionInfo> {
+        {
+            let _one = self.reconnecting.lock().await;
+            let current = self.current();
+            let target = ConnectionProfile { database: name.into(), ..self.profile.clone() };
+            let mut steps = Steps::default();
+            let opened = match current.tunnel.clone().filter(|t| !t.is_closed()) {
+                Some(tunnel) => Self::sign_in(&target, &self.secrets, &mut steps, Some(tunnel)).await,
+                None => Self::open_with(&target, &self.secrets, &mut steps).await,
+            };
+            let fresh = opened.map_err(|e| at_failed_step(e, &steps))?;
+            *self.database.lock().unwrap() = name.into();
+            *self.live.lock().unwrap() = Arc::new(fresh);
+        }
+        Ok(self.info())
     }
 
     /// Run SQL. A connection that dropped is opened again first. If it drops while the statement
@@ -273,7 +342,8 @@ impl Session {
         if !Arc::ptr_eq(&live, dead) {
             return Ok(live);
         }
-        let fresh = Arc::new(Self::connect(&self.profile, &self.secrets).await?);
+        let target = ConnectionProfile { database: self.database.lock().unwrap().clone(), ..self.profile.clone() };
+        let fresh = Arc::new(Self::connect(&target, &self.secrets).await?);
         *self.live.lock().unwrap() = fresh.clone();
         self.reconnected.store(true, Ordering::SeqCst);
         tracing::info!("the connection to {} dropped and was opened again", self.profile.name);
@@ -293,6 +363,19 @@ impl Session {
         let _running = Running(self);
         fut.await
     }
+}
+
+/// A connect error, tagged with the step that failed and its hint.
+fn at_failed_step(e: Error, steps: &Steps) -> Error {
+    match steps.list.iter().find(|s| s.status == StepStatus::Failed) {
+        Some(failed) => Error::Step { step: failed.label.clone(), hint: failed.hint.clone(), source: Box::new(e) },
+        None => e,
+    }
+}
+
+/// The first column of the first result, as text: a list of names.
+fn names(out: &[crate::ResultSet]) -> Vec<String> {
+    out.first().map(|set| set.rows.iter().filter_map(|r| r.first().cloned().flatten()).collect()).unwrap_or_default()
 }
 
 /// What to try when signing in to the database fails.

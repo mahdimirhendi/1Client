@@ -349,6 +349,24 @@ function runSql(sql: string): QueryOutput {
 const SHOP = "11111111-1111-4111-8111-111111111111";
 const minutesAgo = (m: number) => Date.now() - m * 60_000;
 const sessions = new Map<string, string>();
+/** The database each session is in. */
+const sessionDbs = new Map<string, string>();
+
+/** The databases a server offers: on MySQL the made-up schemas, which play its databases here. */
+function databasesOf(p: ConnectionProfile): string[] {
+  const names = p.engine === "postgres" ? ["analytics", "postgres", "shop_staging"] : [...new Set(tables.map((t) => t.info.schema))];
+  return [...new Set([...names, ...(p.database ? [p.database] : [])])].sort();
+}
+
+function sessionInfo(sessionId: string, p: ConnectionProfile): SessionInfo {
+  return {
+    sessionId,
+    profileId: p.id,
+    serverVersion: p.engine === "postgres" ? "PostgreSQL 17.2" : "MySQL 8.4.3",
+    database: sessionDbs.get(sessionId) ?? "",
+    hops: p.network.mode === "direct" ? 0 : p.network.mode === "sshTunnel" ? 1 : p.network.hops.length,
+  };
+}
 
 let history: HistoryEntry[] = [
   [`SELECT status, count(*), sum(total)\nFROM orders\nGROUP BY status;`, 2880, 41, 4, null],
@@ -398,7 +416,7 @@ function keyChanged(p: ConnectionProfile): AppError | null {
   };
 }
 
-/** Diagram canvases by connection; none until a connection's diagram is first opened. */
+/** Diagram canvases by `<connection id>/<database>`; none until a diagram is first opened there. */
 const canvases = new Map<string, Canvas[]>();
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -418,7 +436,7 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
     case "delete_connection": {
       const i = profiles.findIndex((x) => x.id === args.id);
       if (i >= 0) profiles.splice(i, 1);
-      canvases.delete(String(args.id));
+      for (const place of canvases.keys()) if (place.startsWith(`${args.id}/`)) canvases.delete(place);
       return undefined as T;
     }
     case "test_connection": {
@@ -463,12 +481,28 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
       if (changed) throw { ...changed, message: `${changed.step}: ${changed.message}` };
       const sessionId = crypto.randomUUID();
       sessions.set(sessionId, p.id);
-      return {
-        sessionId,
-        profileId: p.id,
-        serverVersion: p.engine === "postgres" ? "PostgreSQL 17.2" : "MySQL 8.4.3",
-        hops: p.network.mode === "direct" ? 0 : p.network.mode === "sshTunnel" ? 1 : p.network.hops.length,
-      } satisfies SessionInfo as T;
+      // PostgreSQL opens the database named after the user when none is set.
+      sessionDbs.set(sessionId, p.database || (p.engine === "postgres" ? p.user : ""));
+      return sessionInfo(sessionId, p) as T;
+    }
+    case "list_databases": {
+      const p = args.profile as ConnectionProfile;
+      if ((args.secrets as { dbPassword?: string } | undefined)?.dbPassword === "wrong")
+        throw { kind: "database", message: `Sign in to ${p.engine === "postgres" ? "PostgreSQL" : "MySQL"} as ${p.user}: password authentication failed` };
+      return databasesOf(p) as T;
+    }
+    case "session_databases": {
+      const p = profiles.find((x) => x.id === sessions.get(String(args.sessionId)))!;
+      return databasesOf(p) as T;
+    }
+    case "use_database": {
+      const sessionId = String(args.sessionId);
+      const p = profiles.find((x) => x.id === sessions.get(sessionId))!;
+      const database = String(args.database);
+      if (database && !databasesOf(p).includes(database))
+        throw { kind: "database", message: `Open database ${database}: database "${database}" does not exist` };
+      sessionDbs.set(sessionId, database);
+      return sessionInfo(sessionId, p) as T;
     }
     case "reveal_secret": {
       const field = args.field as SecretField;
@@ -496,27 +530,29 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
       return [] as T;
     case "introspect":
       return structuredClone(tables.map((t) => t.info)) as T;
-    case "list_canvases":
-      return (canvases.has(String(args.profileId)) ? structuredClone(canvases.get(String(args.profileId))) : null) as T;
+    case "list_canvases": {
+      const place = `${args.profileId}/${args.database}`;
+      return (canvases.has(place) ? structuredClone(canvases.get(place)) : null) as T;
+    }
     case "save_canvas": {
-      const profileId = String(args.profileId);
-      if (!profiles.some((p) => p.id === profileId)) throw { kind: "config", message: "Save this connection to keep canvases for it" };
+      const place = `${args.profileId}/${args.database}`;
+      if (!profiles.some((p) => p.id === args.profileId)) throw { kind: "config", message: "Save this connection to keep canvases for it" };
       const c = structuredClone(args.canvas as Canvas);
       c.name = c.name.trim();
       if (!c.name) throw { kind: "config", message: "Give the canvas a name" };
       if (c.scope.kind === "picked") c.autoAdd = false;
-      const list = canvases.get(profileId) ?? [];
+      const list = canvases.get(place) ?? [];
       const i = list.findIndex((x) => x.id === c.id);
       c.updatedAt = Date.now();
       c.createdAt = i >= 0 ? list[i].createdAt : c.updatedAt;
       if (i >= 0) list[i] = c;
       else list.push(c);
-      canvases.set(profileId, list);
+      canvases.set(place, list);
       return structuredClone(c) as T;
     }
     case "delete_canvas": {
-      const profileId = String(args.profileId);
-      canvases.set(profileId, (canvases.get(profileId) ?? []).filter((c) => c.id !== args.id));
+      const place = `${args.profileId}/${args.database}`;
+      canvases.set(place, (canvases.get(place) ?? []).filter((c) => c.id !== args.id));
       return undefined as T;
     }
     case "export_diagram": {

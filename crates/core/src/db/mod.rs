@@ -44,6 +44,31 @@ impl DbConn {
     }
 }
 
+/// The databases this user can open, system ones left out.
+pub(crate) fn databases_sql(engine: Engine) -> &'static str {
+    match engine {
+        Engine::Postgres => {
+            "SELECT datname FROM pg_database \
+             WHERE datallowconn AND NOT datistemplate AND has_database_privilege(datname, 'CONNECT') \
+             ORDER BY datname"
+        }
+        // SCHEMATA lists only the databases the user has some privilege on.
+        Engine::Mysql => {
+            "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA \
+             WHERE SCHEMA_NAME NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys') \
+             ORDER BY SCHEMA_NAME"
+        }
+    }
+}
+
+/// The database the connection is in (MySQL: NULL when none is chosen).
+pub(crate) fn current_database_sql(engine: Engine) -> &'static str {
+    match engine {
+        Engine::Postgres => "SELECT current_database()",
+        Engine::Mysql => "SELECT DATABASE()",
+    }
+}
+
 /// Columns of every user table and view, with key flags.
 pub(crate) fn introspection_sql(engine: Engine) -> &'static str {
     match engine {

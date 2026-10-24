@@ -217,6 +217,17 @@ async fn test_connection(
     Ok(Session::test(profile, &merged).await)
 }
 
+/// The databases the server offers, for the Browse button of the connection form (unsaved values).
+#[tauri::command]
+async fn list_databases(
+    state: State<'_, AppState>,
+    profile: ConnectionProfile,
+    secrets: Option<SecretsInput>,
+) -> CmdResult<Vec<String>> {
+    let merged = state.secrets.merged(&profile, &secrets.unwrap_or_default()).await?;
+    Session::list_databases(&profile, &merged).await
+}
+
 /// The server's key changed and the user confirmed it was expected: forget the old key, keep the new one.
 #[tauri::command]
 async fn replace_host_key(host: String, port: u16, key: String) -> CmdResult<()> {
@@ -250,6 +261,21 @@ async fn open_session(state: State<'_, AppState>, profile_id: Uuid) -> CmdResult
     }
     state.sessions.write().await.insert(session.id, Arc::new(session));
     Ok(info)
+}
+
+/// The databases an open connection can switch to.
+#[tauri::command]
+async fn session_databases(app: AppHandle, state: State<'_, AppState>, session_id: Uuid) -> CmdResult<Vec<String>> {
+    let session = state.session(session_id).await?;
+    let result = session.databases().await;
+    report_reconnect(&app, &session);
+    result
+}
+
+/// Switch an open connection to another database, for this session only.
+#[tauri::command]
+async fn use_database(state: State<'_, AppState>, session_id: Uuid, database: String) -> CmdResult<SessionInfo> {
+    state.session(session_id).await?.use_database(&database).await
 }
 
 #[tauri::command]
@@ -320,24 +346,35 @@ async fn delete_saved_query(state: State<'_, AppState>, id: Uuid) -> CmdResult<(
 
 // ---------- Diagram canvases ----------
 
-/// A connection's canvases; `None` when it never had any.
+/// The canvases of a connection's database; `None` when it never had any.
 #[tauri::command]
-async fn list_canvases(state: State<'_, AppState>, profile_id: Uuid) -> CmdResult<Option<Vec<Canvas>>> {
-    state.diagrams.lock().await.list(profile_id)
+async fn list_canvases(
+    state: State<'_, AppState>,
+    profile_id: Uuid,
+    database: String,
+) -> CmdResult<Option<Vec<Canvas>>> {
+    let Some(profile) = state.store.lock().await.get(profile_id).cloned() else { return Ok(None) };
+    state.diagrams.lock().await.list(&profile, &database)
 }
 
 /// Add or update a canvas. Like the history, connections opened from a link and not saved keep none.
 #[tauri::command]
-async fn save_canvas(state: State<'_, AppState>, profile_id: Uuid, canvas: Canvas) -> CmdResult<Canvas> {
-    if state.store.lock().await.get(profile_id).is_none() {
+async fn save_canvas(
+    state: State<'_, AppState>,
+    profile_id: Uuid,
+    database: String,
+    canvas: Canvas,
+) -> CmdResult<Canvas> {
+    let Some(profile) = state.store.lock().await.get(profile_id).cloned() else {
         return Err(Error::Config("Save this connection to keep canvases for it".into()));
-    }
-    state.diagrams.lock().await.save(profile_id, canvas)
+    };
+    state.diagrams.lock().await.save(&profile, &database, canvas)
 }
 
 #[tauri::command]
-async fn delete_canvas(state: State<'_, AppState>, profile_id: Uuid, id: Uuid) -> CmdResult<()> {
-    state.diagrams.lock().await.delete(profile_id, id)
+async fn delete_canvas(state: State<'_, AppState>, profile_id: Uuid, database: String, id: Uuid) -> CmdResult<()> {
+    let Some(profile) = state.store.lock().await.get(profile_id).cloned() else { return Ok(()) };
+    state.diagrams.lock().await.delete(&profile, &database, id)
 }
 
 #[derive(Clone, Copy, serde::Deserialize)]
@@ -510,8 +547,11 @@ pub fn run() {
             secret_references,
             reveal_secret,
             test_connection,
+            list_databases,
             replace_host_key,
             open_session,
+            session_databases,
+            use_database,
             close_session,
             run_query,
             list_history,

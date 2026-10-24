@@ -58,8 +58,11 @@ export interface DocTab {
 /** A top-level tab: one open connection with its own inner tabs. */
 export interface ConnTab {
   id: string; // session id
+  /** The saved settings; `database` says which database the tab is in now. */
   profile: ConnectionProfile;
   info: SessionInfo;
+  /** The database the tab works in: the saved one, or one switched to ("" on MySQL: none chosen). */
+  database: string;
   /** May be empty: closing the last tab leaves the connection open. */
   docs: DocTab[];
   /** Id of the shown tab, "" when there is none. */
@@ -132,6 +135,8 @@ interface State {
   closeConnection(connId: string): Promise<void>;
   activateConn(connId: string): void;
   refreshSchema(connId: string): Promise<void>;
+  /** Work in another database of the same server, in this tab, for this session. */
+  useDatabase(connId: string, database: string): Promise<void>;
   /** Show the query tabs or the diagram. The diagram reads the schema again, so it is up to date. */
   setView(connId: string, view: ConnTab["view"]): void;
 
@@ -259,7 +264,15 @@ export const useApp = create<State>((set, get) => ({
     try {
       const info = await api.openSession(profileId);
       const first = queryDoc([]);
-      const tab: ConnTab = { id: info.sessionId, profile, info, docs: [first], activeDoc: first.id, view: "query" };
+      const tab: ConnTab = {
+        id: info.sessionId,
+        profile,
+        info,
+        database: info.database,
+        docs: [first],
+        activeDoc: first.id,
+        view: "query",
+      };
       set((s) => ({ conns: [...s.conns, tab], activeConn: tab.id, showWelcome: false, connecting: null }));
       get().refreshSchema(tab.id);
       get().loadHistory(tab.id);
@@ -332,6 +345,36 @@ export const useApp = create<State>((set, get) => ({
     }
   },
 
+  async useDatabase(connId, database) {
+    const conn = get().conns.find((c) => c.id === connId);
+    if (!conn || conn.database === database) return;
+    // Unsaved grid edits belong to the database they were made in.
+    if (conn.docs.some((d) => d.dirty))
+      return showToast("Save or discard your changes in the grid before switching databases.", "error");
+    useCanvases.getState().flush(conn.profile.id);
+    let info: SessionInfo;
+    try {
+      info = await api.useDatabase(connId, database);
+    } catch (e) {
+      return showToast(`Couldn't open ${database || "the connection without a database"}: ${(e as AppError).message}`, "error");
+    }
+    // On PostgreSQL table tabs belong to the old database, and so do query results: editing those
+    // would change the new one. Query tabs keep their SQL. MySQL tabs name their database and stay.
+    const postgres = conn.profile.engine === "postgres";
+    set((s) => ({
+      conns: s.conns.map((c) => {
+        if (c.id !== connId) return c;
+        const docs = postgres
+          ? c.docs.filter((d) => d.kind !== "table").map((d) => ({ ...d, output: undefined, error: undefined, lastRun: undefined }))
+          : c.docs;
+        const activeDoc = docs.some((d) => d.id === c.activeDoc) ? c.activeDoc : (docs.at(-1)?.id ?? "");
+        return { ...c, info, database: info.database, docs, activeDoc, schema: undefined, schemaError: undefined };
+      }),
+    }));
+    if (conn.view === "diagram") useCanvases.getState().load(get().conns.find((c) => c.id === connId)!);
+    get().refreshSchema(connId);
+  },
+
   setView(connId, view) {
     const conn = get().conns.find((c) => c.id === connId);
     if (!conn || conn.view === view) return;
@@ -361,7 +404,7 @@ export const useApp = create<State>((set, get) => ({
     const ref: TableRef = { schema: table.schema, name: table.name, ...(key.length ? { key } : {}) };
     const sql = tableSql(conn.profile.engine, ref);
     // Same-named tables in other schemas (public.orders, mart.orders) get the schema in their title.
-    const title = table.schema === defaultSchema(conn.profile) ? table.name : `${table.schema}.${table.name}`;
+    const title = table.schema === defaultSchema(conn.profile.engine, conn.database) ? table.name : `${table.schema}.${table.name}`;
     const doc: DocTab = { id: uid(), kind: "table", title, sql, running: false, showEditor: false, table: ref };
     set((s) => ({
       conns: s.conns.map((c) => (c.id === connId ? { ...c, docs: [...c.docs, doc], activeDoc: doc.id, view: "query" } : c)),

@@ -42,9 +42,16 @@ export const api = {
   deleteConnection: (id: string) => call<void>("delete_connection", { id }),
   testConnection: (profile: ConnectionProfile, secrets?: SecretsInput) =>
     call<TestReport>("test_connection", { profile, secrets }),
+  /** The databases the server offers, connecting with the form's values (the Browse button). */
+  listDatabases: (profile: ConnectionProfile, secrets?: SecretsInput) =>
+    call<string[]>("list_databases", { profile, secrets }),
   /** The server's SSH key changed and the user confirmed it: remove the old key (ssh-keygen -R), keep this one. */
   replaceHostKey: (host: string, port: number, key: string) => call<void>("replace_host_key", { host, port, key }),
   openSession: (profileId: string) => call<SessionInfo>("open_session", { profileId }),
+  /** The databases an open connection can switch to. */
+  sessionDatabases: (sessionId: string) => call<string[]>("session_databases", { sessionId }),
+  /** Switch an open connection to another database, for this session only. */
+  useDatabase: (sessionId: string, database: string) => call<SessionInfo>("use_database", { sessionId, database }),
   secretReferences: (id: string) => call<SecretsInput>("secret_references", { id }),
   /** One saved password, only when the user asks to see it. */
   revealSecret: (profileId: string, field: SecretField) => call<string | null>("reveal_secret", { profileId, field }),
@@ -65,10 +72,12 @@ export const api = {
   listSavedQueries: (profileId: string) => call<SavedQuery[]>("list_saved_queries", { profileId }),
   saveQuery: (query: SavedQuery) => call<SavedQuery>("save_query", { query }),
   deleteSavedQuery: (id: string) => call<void>("delete_saved_query", { id }),
-  /** `null` when the connection never had a canvas. */
-  listCanvases: (profileId: string) => call<Canvas[] | null>("list_canvases", { profileId }),
-  saveCanvas: (profileId: string, canvas: Canvas) => call<Canvas>("save_canvas", { profileId, canvas }),
-  deleteCanvas: (profileId: string, id: string) => call<void>("delete_canvas", { profileId, id }),
+  /** A connection's canvases in a database; `null` when it never had one. */
+  listCanvases: (profileId: string, database: string) => call<Canvas[] | null>("list_canvases", { profileId, database }),
+  saveCanvas: (profileId: string, database: string, canvas: Canvas) =>
+    call<Canvas>("save_canvas", { profileId, database, canvas }),
+  deleteCanvas: (profileId: string, database: string, id: string) =>
+    call<void>("delete_canvas", { profileId, database, id }),
   /** Asks where to save; `data` is SVG text or a base64 PNG. Returns the path, or null when cancelled. */
   exportDiagram: (name: string, kind: "png" | "svg", data: string) =>
     call<string | null>("export_diagram", { name, kind, data }),

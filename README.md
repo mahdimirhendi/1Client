@@ -37,6 +37,9 @@ connection is tagged with its environment so you always know where you are.
   shows the new fingerprint; **Replace Key and Retry** runs `ssh-keygen -R` for you and connects.
 - **Test Connection** walks through every step (reach the host, verify its key, sign in, reach the
   database, sign in, open the database) and tells you which one failed, why, and what to try.
+- **Switch databases** from the toolbar: pick another database on the same server and the tab moves
+  there, through the same SSH tunnel. In the connection form, **Browse…** lists the databases you can
+  open. On MySQL the sidebar shows the database you picked, or all of them.
 - Paste a `postgres://` or `mysql://` URL to fill in the form, or open connections from other apps with a link.
 
 **Write SQL**
@@ -134,10 +137,12 @@ npm run app        # builds 1Client.app and copies it to /Applications
 ## Getting started
 
 1. Click **New Connection…** (⌘N), pick PostgreSQL or MySQL, and fill in the server, or paste a URL.
+   **Browse…** next to Database lists the databases on the server.
 2. Under **Connect via**, choose *Direct*, *SSH Tunnel* or *Bastion Host* and add your hops. Enter the
    database host as the last hop sees it (often `localhost` or a private IP).
 3. Pick an environment and the safety options, then click **Test Connection**.
 4. **Save and Connect**. Double-click a table in the sidebar to browse it, or write SQL and press ⌘↵.
+   Click the database name at the top left to switch to another database on the same server.
    Click **Diagram** at the top right to see the tables and how they link.
 
 ## Keyboard shortcuts

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import { useCanvases } from "../canvases";
+import { placeKey, useCanvases } from "../canvases";
 import {
   NOTE_H,
   NOTE_W,
@@ -43,10 +43,10 @@ export function Diagram({ conn }: { conn: ConnTab }) {
   const temporary = useApp((s) => !!s.temporary[conn.profile.id]);
   const saveTemporary = useApp((s) => s.saveTemporary);
   const refreshSchema = useApp((s) => s.refreshSchema);
-  const entry = useCanvases((s) => s.byProfile[conn.profile.id]);
+  const entry = useCanvases((s) => s.byPlace[placeKey(conn)]);
   const { ensure, setSheet, create } = useCanvases.getState();
   const schema = useMemo(() => indexSchema(conn.schema ?? []), [conn.schema]);
-  const first = defaultSchema(conn.profile);
+  const first = defaultSchema(conn.profile.engine, conn.database);
 
   // A connection seen in the diagram for the first time gets a canvas of the whole database.
   const list = entry?.list;

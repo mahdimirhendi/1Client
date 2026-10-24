@@ -129,6 +129,8 @@ export interface SessionInfo {
   sessionId: string;
   profileId: string;
   serverVersion: string;
+  /** The database the session is in ("" on MySQL when none is chosen). */
+  database: string;
   hops: number;
 }
 

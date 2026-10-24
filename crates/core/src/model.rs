@@ -254,6 +254,8 @@ pub struct SessionInfo {
     pub session_id: Uuid,
     pub profile_id: Uuid,
     pub server_version: String,
+    /// The database the session is in ("" on MySQL when none is chosen).
+    pub database: String,
     pub hops: usize,
 }
 
